@@ -14,6 +14,7 @@ import {
   Alert
 } from '@cloudscape-design/components';
 import { jobService } from '../services/jobService';
+import * as XLSX from 'xlsx';
 
 const Dashboard = ({ addNotification }) => {
   const [stats, setStats] = useState({});
@@ -22,6 +23,75 @@ const Dashboard = ({ addNotification }) => {
   const [reviewQueue, setReviewQueue] = useState([]);
   const [errorCount, setErrorCount] = useState(0);
   const [hasError, setHasError] = useState(false);
+
+  // Export dashboard summary to Excel
+  const handleExportDashboardSummary = async () => {
+    try {
+      // Get more detailed jobs data for export
+      const jobsData = await jobService.getJobs({ limit: 100 });
+      
+      // Create Excel-friendly data
+      const jobsForExport = jobsData.jobs.map(job => ({
+        'Job ID': job.id,
+        'File Name': job.file_name,
+        'Status': job.status,
+        'Priority': jobService.getPriorityText(job.priority),
+        'Created At': formatTime(job.created_at),
+        'Completed At': job.completed_at ? formatTime(job.completed_at) : 'N/A',
+        'File Size': jobService.formatFileSize(job.file_size),
+        'Progress': `${job.progress || 0}%`
+      }));
+
+      // Create Excel workbook
+      const workbook = XLSX.utils.book_new();
+      
+      // Jobs sheet
+      const jobsSheet = XLSX.utils.json_to_sheet(jobsForExport);
+      jobsSheet['!cols'] = [
+        { wch: 15 }, { wch: 25 }, { wch: 12 }, { wch: 10 },
+        { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 10 }
+      ];
+      XLSX.utils.book_append_sheet(workbook, jobsSheet, 'Jobs');
+
+      // Stats summary sheet
+      const statsData = [
+        { 'Metric': 'Total Jobs', 'Value': stats.total_jobs || 0 },
+        { 'Metric': 'Pending', 'Value': stats.pending || 0 },
+        { 'Metric': 'Processing', 'Value': stats.processing || 0 },
+        { 'Metric': 'Completed', 'Value': stats.completed || 0 },
+        { 'Metric': 'Failed', 'Value': stats.failed || 0 },
+        { 'Metric': 'Review Queue', 'Value': stats.review_queue || 0 },
+        { 'Metric': 'Success Rate', 'Value': `${(stats.success_rate || 0).toFixed(1)}%` },
+        { 'Metric': 'Avg Processing Time', 'Value': `${stats.avg_processing_time || 0}s` },
+        { 'Metric': 'Jobs Today', 'Value': stats.jobs_today || 0 }
+      ];
+
+      const statsSheet = XLSX.utils.json_to_sheet(statsData);
+      statsSheet['!cols'] = [{ wch: 25 }, { wch: 15 }];
+      XLSX.utils.book_append_sheet(workbook, statsSheet, 'Dashboard Stats');
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+      const fileName = `dashboard_summary_${timestamp}.xlsx`;
+
+      // Download the file
+      XLSX.writeFile(workbook, fileName);
+
+      addNotification({
+        type: 'success',
+        header: 'Export Successful',
+        content: `Dashboard summary exported to ${fileName}`
+      });
+
+    } catch (error) {
+      console.error('Export failed:', error);
+      addNotification({
+        type: 'error',
+        header: 'Export Failed',
+        content: error.message
+      });
+    }
+  };
 
   const fetchDashboardData = useCallback(async () => {
     // Skip if we've had too many errors

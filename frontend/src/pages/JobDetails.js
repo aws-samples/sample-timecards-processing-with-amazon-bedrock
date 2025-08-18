@@ -20,6 +20,7 @@ import {
 import { CodeView } from "@cloudscape-design/code-view";
 import jsonHighlight from "@cloudscape-design/code-view/highlight/json";
 import { jobService } from '../services/jobService';
+import { exportTimecardEntriesToExcel, exportJobResultToExcel } from '../utils/excelExport';
 
 // Import markdown components
 import ReactMarkdown from 'react-markdown';
@@ -44,6 +45,72 @@ const JobDetails = ({ addNotification }) => {
   const [completingReview, setCompletingReview] = useState(false);
   const [showStopModal, setShowStopModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+
+  // Excel export handlers
+  const handleExportTimecardEntries = (entries) => {
+    try {
+      const result = exportTimecardEntriesToExcel(
+        entries,
+        `timecard_entries_${job?.file_name?.replace(/\.[^/.]+$/, '') || jobId}`,
+        {
+          id: job?.id,
+          file_name: job?.file_name,
+          status: job?.status,
+          created_at: job?.created_at,
+          completed_at: job?.completed_at
+        }
+      );
+
+      if (result.success) {
+        addNotification({
+          type: 'success',
+          header: 'Export Successful',
+          content: `Exported ${result.entriesCount} timecard entries to ${result.fileName}`
+        });
+      } else {
+        addNotification({
+          type: 'error',
+          header: 'Export Failed',
+          content: result.error
+        });
+      }
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Export Failed',
+        content: error.message
+      });
+    }
+  };
+
+  const handleExportJobResult = () => {
+    try {
+      const result = exportJobResultToExcel(
+        job.result,
+        `job_report_${job?.file_name?.replace(/\.[^/.]+$/, '') || jobId}`
+      );
+
+      if (result.success) {
+        addNotification({
+          type: 'success',
+          header: 'Export Successful',
+          content: `Full job report exported to ${result.fileName}`
+        });
+      } else {
+        addNotification({
+          type: 'error',
+          header: 'Export Failed',
+          content: result.error
+        });
+      }
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Export Failed',
+        content: error.message
+      });
+    }
+  };
 
   const fetchJob = useCallback(async () => {
     try {
@@ -376,6 +443,25 @@ const JobDetails = ({ addNotification }) => {
           <Header
             counter={`(${entries.length})`}
             description="Individual timecard entries with pagination and sorting support"
+            actions={
+              <SpaceBetween direction="horizontal" size="xs">
+                <Button
+                  iconName="download"
+                  onClick={() => handleExportTimecardEntries(transformedEntries)}
+                  disabled={entries.length === 0}
+                >
+                  Export to Excel
+                </Button>
+                <Button
+                  iconName="download"
+                  variant="primary"
+                  onClick={() => handleExportJobResult()}
+                  disabled={!job?.result}
+                >
+                  Export Full Report
+                </Button>
+              </SpaceBetween>
+            }
           >
             Timecard Entries
           </Header>
