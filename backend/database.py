@@ -103,10 +103,14 @@ class Job:
 
     def to_dict(self):
         data = asdict(self)
-        # Convert datetime objects to ISO strings
+        # Convert datetime objects to ISO strings with UTC timezone
         for field in ["created_at", "updated_at", "started_at", "completed_at"]:
             if data[field]:
-                data[field] = data[field].isoformat()
+                dt = data[field]
+                # Ensure datetime is timezone-aware (assume UTC if naive)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                data[field] = dt.isoformat()
         # Convert enums to values
         data["status"] = self.status.value
         data["priority"] = self.priority.value
