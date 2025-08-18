@@ -54,7 +54,7 @@ Required AWS service permissions:
 - S3, CloudFront
 - IAM, Application Auto Scaling
 - CloudWatch Logs
-- AWS Bedrock (for application runtime)
+- Amazon Bedrock (for application runtime)
 
 ### 3. Deploy Infrastructure
 

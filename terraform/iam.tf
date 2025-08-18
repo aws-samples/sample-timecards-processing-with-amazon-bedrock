@@ -43,7 +43,7 @@ resource "aws_iam_role" "ecs_task" {
   tags = var.tags
 }
 
-# ECS Task Policy for AWS Bedrock and S3
+# ECS Task Policy for Amazon Bedrock and S3
 resource "aws_iam_role_policy" "ecs_task" {
   name = "${var.project_name}-ecs-task-policy"
   role = aws_iam_role.ecs_task.id

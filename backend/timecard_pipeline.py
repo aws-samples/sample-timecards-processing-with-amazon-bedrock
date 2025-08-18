@@ -427,7 +427,7 @@ class TimecardPipeline:
     def step3_automated_reasoning(
         self, extracted_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Step 3: Validation using AWS Bedrock Automated Reasoning with Human-in-Loop"""
+        """Step 3: Validation using Amazon Bedrock Automated Reasoning with Human-in-Loop"""
 
         # Extract key data with safe conversion
         employee_name = extracted_data.get("employee_name", "Unknown")

@@ -6,7 +6,7 @@ A scalable, AI-powered timecard processing system built on Amazon Bedrock with [
 
 ![Architecture Diagram](preview.png)
 
-This solution demonstrates a modern, cloud-native approach to timecard processing using AWS services including ECS Fargate, RDS PostgreSQL, AWS Bedrock, and CloudFront. The system processes Excel/CSV timecard files through an AI pipeline that extracts data, validates compliance with federal wage laws, and routes complex cases for human review.
+This solution demonstrates a modern, cloud-native approach to timecard processing using AWS services including ECS Fargate, RDS PostgreSQL, Amazon Bedrock, and CloudFront. The system processes Excel/CSV timecard files through an AI pipeline that extracts data, validates compliance with federal wage laws, and routes complex cases for human review.
 
 ## Application Logic Flow
 
@@ -42,7 +42,7 @@ sequenceDiagram
     participant A as Flask API
     participant Q as Job Queue
     participant P as AI Pipeline
-    participant B as AWS Bedrock
+    participant B as Amazon Bedrock
     participant D as Database
 
     U->>F: Upload Excel/CSV file
@@ -77,7 +77,7 @@ sequenceDiagram
 ```
 
 **System Interaction Explanation:**
-This sequence diagram shows the detailed interaction between system components during timecard processing. The frontend communicates with the Flask API through RESTful endpoints, while background workers continuously poll the job queue for new tasks. The AI pipeline processes files through multiple stages: Excel parsing, data extraction via AWS Bedrock's Claude models, and compliance validation against configurable federal wage laws. The system uses database-driven job persistence to ensure reliability across application restarts. Frontend polling occurs every 15 seconds to provide real-time status updates without overwhelming the server.
+This sequence diagram shows the detailed interaction between system components during timecard processing. The frontend communicates with the Flask API through RESTful endpoints, while background workers continuously poll the job queue for new tasks. The AI pipeline processes files through multiple stages: Excel parsing, data extraction via Amazon Bedrock's Claude models, and compliance validation against configurable federal wage laws. The system uses database-driven job persistence to ensure reliability across application restarts. Frontend polling occurs every 15 seconds to provide real-time status updates without overwhelming the server.
 
 ### AI Processing Pipeline
 
@@ -112,7 +112,7 @@ The AI pipeline transforms raw timecard files into validated, structured data th
 - **Frontend**: React application with AWS Cloudscape Design System
 - **Backend**: Python Flask API with asynchronous job processing
 - **Database**: PostgreSQL (AWS RDS) for production, SQLite for local development
-- **AI Processing**: AWS Bedrock with Claude models for intelligent data extraction
+- **AI Processing**: Amazon Bedrock with Claude models for intelligent data extraction
 - **Infrastructure**: Fully automated deployment using Terraform
 - **Monitoring**: CloudWatch Logs with structured logging and health checks
 
@@ -138,7 +138,7 @@ Jobs progress through defined states: Pending → Processing → (Completed|Fail
 The system uses Pandas to parse Excel/CSV files into normalized DataFrames, handling various formats (.xlsx, .xls, .xlsm, .csv) and encoding issues. Data is then converted to a structured markdown format optimized for AI processing, including employee information, daily rates, hours worked, and date ranges.
 
 **AI Model Integration:**
-The system integrates with AWS Bedrock's Claude models through configurable model selection:
+The system integrates with Amazon Bedrock's Claude models through configurable model selection:
 - **Claude Opus 4.1**: Highest accuracy for complex timecards, slower processing
 - **Claude Sonnet 4**: Balanced performance for general use cases  
 - **Claude 3.7 Sonnet**: Fastest processing for simple timecards, cost-optimized
@@ -184,7 +184,7 @@ Job data, including processing results and validation outcomes, is stored as JSO
 The system implements exponential backoff retry logic for transient failures, including database connection issues, S3 access problems, and AI service timeouts. Failed jobs are automatically retried up to 3 times before being marked as failed.
 
 **Circuit Breaker Pattern:**
-AI service calls are protected by circuit breaker logic that temporarily disables processing when AWS Bedrock experiences outages, preventing cascade failures and resource exhaustion.
+AI service calls are protected by circuit breaker logic that temporarily disables processing when Amazon Bedrock experiences outages, preventing cascade failures and resource exhaustion.
 
 **Graceful Degradation:**
 When AI services are unavailable, the system can optionally route jobs directly to human review queues, ensuring business continuity during service disruptions.
@@ -718,7 +718,7 @@ See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more inform
 
 ## Additional Resources
 
-- [AWS Bedrock Documentation](https://docs.aws.amazon.com/bedrock/)
+- [Amazon Bedrock Documentation](https://docs.aws.amazon.com/bedrock/)
 - [ECS Fargate Best Practices](https://docs.aws.amazon.com/AmazonECS/latest/bestpracticesguide/)
 - [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
 - [React Cloudscape Design System](https://cloudscape.design/)
