@@ -7,8 +7,6 @@ resource "null_resource" "docker_build_push" {
   triggers = {
     dockerfile_hash = filemd5("../Dockerfile")
     backend_hash    = sha256(join("", [for f in fileset("../backend", "**") : filesha256("../backend/${f}")]))
-    frontend_hash   = sha256(join("", [for f in fileset("../frontend/src", "**") : filesha256("../frontend/src/${f}")]))
-    package_json    = filemd5("../frontend/package.json")
   }
 
   provisioner "local-exec" {

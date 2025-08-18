@@ -67,7 +67,7 @@ resource "aws_ecs_task_definition" "app" {
         },
         {
           name  = "DATABASE_URL"
-          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}:${aws_db_instance.main.port}/${aws_db_instance.main.db_name}"
+          value = "postgresql://${aws_db_instance.main.username}:${random_password.db_password.result}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}"
         },
         {
           name  = "FLASK_ENV"
@@ -98,6 +98,19 @@ resource "aws_ecs_task_definition" "app" {
         timeout     = 10
         retries     = 5
         startPeriod = 120
+      }
+
+      # Security: Run as non-root user
+      user = "1000:1000"
+      
+      # Security: Read-only root filesystem
+      readonlyRootFilesystem = true
+      
+      # Security: Drop all capabilities
+      linuxParameters = {
+        capabilities = {
+          drop = ["ALL"]
+        }
       }
 
       essential = true

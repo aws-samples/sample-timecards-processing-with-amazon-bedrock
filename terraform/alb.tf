@@ -34,18 +34,47 @@ resource "aws_lb_target_group" "app" {
   tags = var.tags
 }
 
-# ALB Listener
+# Random secret for CloudFront custom header
+resource "random_password" "cloudfront_secret" {
+  length  = 32
+  special = false
+}
+
+# ALB Listener with CloudFront header validation
 resource "aws_lb_listener" "app" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
   protocol          = "HTTP"
 
+  # Default action: deny direct access
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Direct access not allowed"
+      status_code  = "403"
+    }
+  }
+
+  tags = var.tags
+}
+
+# ALB Listener Rule: Allow only requests with correct CloudFront header
+resource "aws_lb_listener_rule" "cloudfront_only" {
+  listener_arn = aws_lb_listener.app.arn
+  priority     = 100
+
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.app.arn
   }
 
-  tags = var.tags
+  condition {
+    http_header {
+      http_header_name = "X-CloudFront-Secret"
+      values           = [random_password.cloudfront_secret.result]
+    }
+  }
 }
 
 # HTTPS Listener (if certificate is provided)

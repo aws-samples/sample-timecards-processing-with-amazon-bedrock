@@ -12,7 +12,8 @@ import {
   PropertyFilter,
   ColumnLayout,
   Container,
-  Link
+  Link,
+  Alert
 } from '@cloudscape-design/components';
 import { jobService } from '../services/jobService';
 
@@ -30,28 +31,58 @@ const ReviewQueue = ({ addNotification }) => {
     operation: 'and'
   });
   const [currentPageIndex, setCurrentPageIndex] = useState(1);
+  const [errorCount, setErrorCount] = useState(0);
+  const [hasError, setHasError] = useState(false);
 
   const fetchReviewQueue = useCallback(async () => {
+    // Skip if we've had too many errors
+    if (errorCount >= 5) {
+      setHasError(true);
+      return;
+    }
+
     try {
       const data = await jobService.getReviewQueue();
       setReviewItems(data.review_queue || []);
       setLoading(false);
+      setErrorCount(0); // Reset error count on success
+      setHasError(false);
     } catch (error) {
       console.error('Failed to fetch review queue:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load review queue',
-        content: error.message
-      });
+      const newErrorCount = errorCount + 1;
+      setErrorCount(newErrorCount);
+      
+      // Only show notification for first error to avoid spam
+      if (errorCount === 0) {
+        addNotification({
+          type: 'error',
+          header: 'Review queue temporarily unavailable',
+          content: 'The review queue service is experiencing issues. Please try again later.'
+        });
+      }
+      
+      // Stop polling after 5 errors
+      if (newErrorCount >= 5) {
+        setHasError(true);
+      }
+      
       setLoading(false);
     }
-  }, [addNotification]);
+  }, [addNotification, errorCount]);
 
   useEffect(() => {
     fetchReviewQueue();
-    const interval = setInterval(fetchReviewQueue, 10000); // Refresh every 10 seconds
-    return () => clearInterval(interval);
-  }, [fetchReviewQueue]);
+    
+    // Only set up polling if we don't have persistent errors
+    if (!hasError) {
+      const interval = setInterval(() => {
+        if (errorCount < 5) {
+          fetchReviewQueue();
+        }
+      }, 30000); // Refresh every 30 seconds (reduced frequency)
+      return () => clearInterval(interval);
+    }
+  }, [fetchReviewQueue, hasError, errorCount]);
 
   const formatTime = (dateString) => {
     if (!dateString) return 'N/A';
@@ -185,6 +216,31 @@ const ReviewQueue = ({ addNotification }) => {
 
   const filteredItems = getFilteredItems();
   const paginatedItems = getPaginatedItems();
+
+  if (hasError) {
+    return (
+      <SpaceBetween size="l">
+        <Header variant="h1">Review Queue</Header>
+        <Alert
+          type="error"
+          header="Service Unavailable"
+          action={
+            <Button
+              onClick={() => {
+                setErrorCount(0);
+                setHasError(false);
+                fetchReviewQueue();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          The review queue service is temporarily unavailable. This may be due to database connectivity issues.
+        </Alert>
+      </SpaceBetween>
+    );
+  }
 
   return (
     <SpaceBetween size="l">

@@ -3,6 +3,7 @@ resource "aws_security_group" "alb" {
   name_prefix = "${var.project_name}-alb-"
   vpc_id      = aws_vpc.main.id
 
+  # Allow HTTP/HTTPS but will be restricted by custom header in ALB listener rules
   ingress {
     description = "HTTP"
     from_port   = 80

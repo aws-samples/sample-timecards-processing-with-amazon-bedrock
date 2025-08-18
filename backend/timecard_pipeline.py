@@ -41,17 +41,22 @@ class TimecardPipeline:
 
         # Initialize AWS clients with configuration and extended timeout
         region = self.config.aws_region if self.config else "us-west-2"
-        
+
         # Configure boto3 with extended timeout for large requests
         from botocore.config import Config
+
         boto_config = Config(
             read_timeout=600,  # 10 minutes
             connect_timeout=60,  # 1 minute
-            retries={'max_attempts': 1}
+            retries={"max_attempts": 1},
         )
-        
-        self.bedrock = boto3.client("bedrock-runtime", region_name=region, config=boto_config)
-        self.guardrails = boto3.client("bedrock", region_name=region, config=boto_config)
+
+        self.bedrock = boto3.client(
+            "bedrock-runtime", region_name=region, config=boto_config
+        )
+        self.guardrails = boto3.client(
+            "bedrock", region_name=region, config=boto_config
+        )
 
         # Initialize compliance rules from configuration
         if self.config:
@@ -223,12 +228,21 @@ class TimecardPipeline:
                                 "items": {
                                     "type": "array",
                                     "prefixItems": [
-                                        {"type": "string", "description": "Employee name"},
-                                        {"type": "string", "description": "Date (YYYY-MM-DD)"},
+                                        {
+                                            "type": "string",
+                                            "description": "Employee name",
+                                        },
+                                        {
+                                            "type": "string",
+                                            "description": "Date (YYYY-MM-DD)",
+                                        },
                                         {"type": "number", "description": "Daily rate"},
-                                        {"type": "string", "description": "Project/Show"},
-                                        {"type": "string", "description": "Department"}
-                                    ]
+                                        {
+                                            "type": "string",
+                                            "description": "Project/Show",
+                                        },
+                                        {"type": "string", "description": "Department"},
+                                    ],
                                 },
                                 "description": "Array of daily entries [employee, date, rate, project, department]",
                             },
@@ -247,18 +261,26 @@ class TimecardPipeline:
             }
 
             # Get model ID from configuration
-            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            model_id = (
+                self.config.bedrock_model_id
+                if self.config
+                else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            )
             logger.info(f"Using model ID for extraction: {model_id}")
-            
+
             # Set max tokens based on model
             max_tokens = self._get_max_tokens_for_model(model_id)
-            
-            # Use Converse API with Tool Use
-            response = self.bedrock.converse(
+
+            # Use Converse API with Tool Use - with retry logic
+            response = self._call_bedrock_with_retry(
                 modelId=model_id,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 toolConfig={"tools": [{"toolSpec": tool_schema}]},
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1, "topP": 1},
+                inferenceConfig={
+                    "maxTokens": max_tokens,
+                    "temperature": 0.1,
+                    "topP": 1,
+                },
             )
 
             # Extract tool use result
@@ -299,7 +321,7 @@ class TimecardPipeline:
             extracted["model_info"] = {
                 "model_id": model_id,
                 "extraction_model": model_id,
-                "max_tokens": max_tokens
+                "max_tokens": max_tokens,
             }
 
             # Post-process and validate the extracted data
@@ -310,7 +332,11 @@ class TimecardPipeline:
         except Exception as e:
             logger.error(f"LLM extraction failed: {e}")
             # Enhanced fallback with better defaults
-            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            model_id = (
+                self.config.bedrock_model_id
+                if self.config
+                else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            )
             return {
                 "employee_name": "Extraction Failed",
                 "employee_count": 0,
@@ -327,7 +353,7 @@ class TimecardPipeline:
                 "model_info": {
                     "model_id": model_id,
                     "extraction_model": model_id,
-                    "error": str(e)
+                    "error": str(e),
                 },
                 "error": str(e),
             }
@@ -459,7 +485,7 @@ class TimecardPipeline:
             "result": "VALID" if not validation_issues else "INVALID",
             "confidence": 0.95,
             "reasoning": "Rule-based validation completed",
-            "compliance_issues": validation_issues
+            "compliance_issues": validation_issues,
         }
 
         # 6. Calculate pay (for daily rate system, pay equals total wage)
@@ -482,10 +508,21 @@ class TimecardPipeline:
             final_result = ValidationResult.SATISFIABLE
 
         # Get model info from extracted data or use default
-        model_info = extracted_data.get("model_info", {
-            "model_id": self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0",
-            "validation_model": self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
-        })
+        model_info = extracted_data.get(
+            "model_info",
+            {
+                "model_id": (
+                    self.config.bedrock_model_id
+                    if self.config
+                    else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ),
+                "validation_model": (
+                    self.config.bedrock_model_id
+                    if self.config
+                    else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+                ),
+            },
+        )
 
         return {
             "validation_result": final_result.value,
@@ -625,17 +662,25 @@ class TimecardPipeline:
             }
 
             # Get model ID from configuration
-            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
-            
+            model_id = (
+                self.config.bedrock_model_id
+                if self.config
+                else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            )
+
             # Set max tokens for validation (smaller requirement)
             max_tokens = min(1000, self._get_max_tokens_for_model(model_id))
-            
-            # Use Converse API with Tool Use for validation
-            response = self.bedrock.converse(
+
+            # Use Converse API with Tool Use for validation - with retry logic
+            response = self._call_bedrock_with_retry(
                 modelId=model_id,
                 messages=[{"role": "user", "content": [{"text": validation_prompt}]}],
                 toolConfig={"tools": [{"toolSpec": validation_tool_schema}]},
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1, "topP": 1},
+                inferenceConfig={
+                    "maxTokens": max_tokens,
+                    "temperature": 0.1,
+                    "topP": 1,
+                },
             )
 
             # Extract tool use result
@@ -675,7 +720,7 @@ class TimecardPipeline:
             result["model_info"] = {
                 "model_id": model_id,
                 "validation_model": model_id,
-                "max_tokens": max_tokens
+                "max_tokens": max_tokens,
             }
             return result
 
@@ -689,8 +734,8 @@ class TimecardPipeline:
                 "model_info": {
                     "model_id": model_id,
                     "validation_model": model_id,
-                    "error": str(e)
-                }
+                    "error": str(e),
+                },
             }
 
     def _generate_compliance_summary(
@@ -811,6 +856,39 @@ class TimecardPipeline:
             logger.error(f"Pipeline failed: {e}")
             return {"status": "error", "error": str(e), "file_path": excel_path}
 
+    def _call_bedrock_with_retry(self, **kwargs):
+        """Call Bedrock API with exponential backoff retry logic"""
+        import time
+        import random
+        from botocore.exceptions import ClientError
+
+        max_retries = 5
+        base_delay = 1
+
+        for attempt in range(max_retries):
+            try:
+                return self.bedrock.converse(**kwargs)
+            except ClientError as e:
+                error_code = e.response.get("Error", {}).get("Code", "")
+
+                if error_code in ["ThrottlingException", "TooManyRequestsException"]:
+                    if attempt < max_retries - 1:
+                        # Exponential backoff with jitter
+                        delay = base_delay * (2**attempt) + random.uniform(0, 1)
+                        logger.warning(
+                            f"Rate limited, retrying in {delay:.2f} seconds (attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                        continue
+                    else:
+                        logger.error(f"Max retries exceeded for rate limiting")
+                        raise
+                else:
+                    # For other errors, don't retry
+                    raise
+
+        raise Exception("Unexpected error in retry logic")
+
     def _get_max_tokens_for_model(self, model_id: str) -> int:
         """Get maximum tokens allowed for the specified model"""
         # Model-specific token limits
@@ -824,7 +902,7 @@ class TimecardPipeline:
             # Legacy models (fallback)
             "anthropic.claude-3-sonnet-20240229-v1:0": 64000,
         }
-        
+
         # Return model-specific limit or default to 32000 for safety
         return model_limits.get(model_id, 32000)
 

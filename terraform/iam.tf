@@ -57,12 +57,15 @@ resource "aws_iam_role_policy" "ecs_task" {
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream",
           "bedrock:ListFoundationModels",
-          "bedrock:GetFoundationModel"
+          "bedrock:GetFoundationModel",
+          "bedrock:Converse",
+          "bedrock:ConverseStream"
         ]
         Resource = [
-          "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-*",
-          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-*",
-          "arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-*"
+          # All foundation models in all regions
+          "arn:aws:bedrock:*::foundation-model/*",
+          # All inference profiles in all regions
+          "arn:aws:bedrock:*:${data.aws_caller_identity.current.account_id}:inference-profile/*"
         ]
       },
       {

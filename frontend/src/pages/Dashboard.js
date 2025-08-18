@@ -10,7 +10,8 @@ import {
   Button,
   Cards,
   Badge,
-  Link
+  Link,
+  Alert
 } from '@cloudscape-design/components';
 import { jobService } from '../services/jobService';
 
@@ -18,37 +19,89 @@ const Dashboard = ({ addNotification }) => {
   const [stats, setStats] = useState({});
   const [recentJobs, setRecentJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-
   const [reviewQueue, setReviewQueue] = useState([]);
+  const [errorCount, setErrorCount] = useState(0);
+  const [hasError, setHasError] = useState(false);
 
   const fetchDashboardData = useCallback(async () => {
+    // Skip if we've had too many errors
+    if (errorCount >= 5) {
+      setHasError(true);
+      return;
+    }
+
     try {
-      const [statsData, jobsData, reviewData] = await Promise.all([
+      // Fetch stats and jobs first (these should work)
+      const [statsData, jobsData] = await Promise.all([
         jobService.getQueueStats(),
-        jobService.getJobs({ limit: 10 }),
-        jobService.getReviewQueue()
+        jobService.getJobs({ limit: 10 })
       ]);
 
       setStats(statsData);
       setRecentJobs(jobsData.jobs || []);
-      setReviewQueue(reviewData.review_queue || []);
+
+      // Try to fetch review queue separately to avoid breaking the whole dashboard
+      try {
+        const reviewData = await jobService.getReviewQueue();
+        setReviewQueue(reviewData.review_queue || []);
+      } catch (reviewError) {
+        console.error('Review queue error:', reviewError);
+        
+        // Show specific error notification for review queue
+        addNotification({
+          type: 'error',
+          header: 'Review Queue Error',
+          content: `Failed to load review queue: ${reviewError.response?.data?.error || reviewError.message}. Function: ${reviewError.response?.data?.function || 'unknown'}`
+        });
+        
+        setReviewQueue([]); // Set empty array instead of failing
+      }
+
       setLoading(false);
+      setErrorCount(0); // Reset error count on success
+      setHasError(false);
     } catch (error) {
       console.error('Failed to fetch dashboard data:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load dashboard',
-        content: error.message
-      });
+      const newErrorCount = errorCount + 1;
+      setErrorCount(newErrorCount);
+      
+      // Show detailed error information
+      const errorDetails = error.response?.data || {};
+      const errorMessage = errorDetails.error || error.message;
+      const functionName = errorDetails.function || 'unknown';
+      const endpoint = errorDetails.endpoint || 'unknown';
+      
+      // Only show notification for first error to avoid spam
+      if (errorCount === 0) {
+        addNotification({
+          type: 'error',
+          header: 'Dashboard Error',
+          content: `${errorMessage} (Function: ${functionName}, Endpoint: ${endpoint})`
+        });
+      }
+      
+      // Stop polling after 5 errors
+      if (newErrorCount >= 5) {
+        setHasError(true);
+      }
+      
       setLoading(false);
     }
-  }, [addNotification]);
+  }, [addNotification, errorCount]);
 
   useEffect(() => {
     fetchDashboardData();
-    const interval = setInterval(fetchDashboardData, 10000); // Refresh every 10 seconds
-    return () => clearInterval(interval);
-  }, [fetchDashboardData]);
+    
+    // Only set up polling if we don't have persistent errors
+    if (!hasError) {
+      const interval = setInterval(() => {
+        if (errorCount < 5) {
+          fetchDashboardData();
+        }
+      }, 15000); // Refresh every 15 seconds (reduced frequency)
+      return () => clearInterval(interval);
+    }
+  }, [fetchDashboardData, hasError, errorCount]);
 
 
 
@@ -69,6 +122,31 @@ const Dashboard = ({ addNotification }) => {
   };
 
 
+
+  if (hasError) {
+    return (
+      <SpaceBetween size="l">
+        <Header variant="h1">Timecard Processing Dashboard</Header>
+        <Alert
+          type="error"
+          header="Dashboard Service Unavailable"
+          action={
+            <Button
+              onClick={() => {
+                setErrorCount(0);
+                setHasError(false);
+                fetchDashboardData();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          The dashboard service is temporarily unavailable. This may be due to database connectivity issues.
+        </Alert>
+      </SpaceBetween>
+    );
+  }
 
   return (
     <SpaceBetween size="l">

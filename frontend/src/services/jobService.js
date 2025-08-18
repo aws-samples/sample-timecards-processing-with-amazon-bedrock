@@ -2,6 +2,19 @@ import axios from 'axios';
 
 const API_BASE = process.env.NODE_ENV === 'production' ? '/api' : 'http://localhost:8000/api';
 
+// Add response interceptor to handle errors consistently
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // Enhance error with more details
+    if (error.response?.data) {
+      const errorData = error.response.data;
+      error.message = `${errorData.error || error.message}${errorData.function ? ` (${errorData.function})` : ''}${errorData.endpoint ? ` [${errorData.endpoint}]` : ''}`;
+    }
+    return Promise.reject(error);
+  }
+);
+
 class JobService {
   async uploadFile(file, onProgress) {
     const formData = new FormData();
@@ -155,6 +168,33 @@ class JobService {
       4: 'Urgent'
     };
     return texts[priority] || 'Normal';
+  }
+
+  async downloadJobFile(jobId, fileName) {
+    try {
+      const response = await axios.get(`${API_BASE}/jobs/${jobId}/download`, {
+        responseType: 'blob'
+      });
+
+      // Create blob link to download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Use the original filename or fallback
+      link.setAttribute('download', fileName || `job_${jobId}_file`);
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      
+      return true;
+    } catch (error) {
+      console.error('Download failed:', error);
+      throw error;
+    }
   }
 }
 

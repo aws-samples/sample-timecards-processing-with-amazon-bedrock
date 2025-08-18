@@ -195,6 +195,6 @@ class ConfigManager:
             'version': self.get('app_version', '1.0.0'),
             'environment': self.get('app_environment', 'development'),
             'build_date': self.get('build_date', '2025-01-17'),
-            'database_path': self.db.db_path,
+            'database_url': str(self.db.engine.url),
             'aws_config': self.validate_aws_config()
         }

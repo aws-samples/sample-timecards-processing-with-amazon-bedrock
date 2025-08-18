@@ -73,8 +73,7 @@ def job_processor():
             
             logger.info(f"Processing job {job.id}: {job.type}")
             
-            # Update job to processing
-            job_queue.update_job_status(job.id, JobStatus.PROCESSING, progress=0)
+            # Job is already marked as processing by get_next_job()
             active_jobs[job.id] = job
             
             # Process job in separate thread
@@ -226,6 +225,41 @@ def upload_file():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/jobs/<job_id>/download", methods=["GET"])
+def download_job_file(job_id):
+    """Download the original file for a job"""
+    try:
+        job = job_queue.get_job(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        
+        # Get file path from metadata
+        file_path = job.metadata.get("file_path") if job.metadata else None
+        if not file_path:
+            return jsonify({"error": "File path not found in job metadata"}), 404
+        
+        file_path = Path(file_path)
+        
+        # Check if file exists
+        if not file_path.exists():
+            return jsonify({"error": "File not found on server"}), 404
+        
+        # Get original filename from job
+        original_filename = job.file_name or file_path.name
+        
+        # Send file for download
+        return send_from_directory(
+            file_path.parent,
+            file_path.name,
+            as_attachment=True,
+            download_name=original_filename
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to download file for job {job_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/jobs", methods=["GET"])
 def get_jobs():
     """Get all jobs with optional filtering"""
@@ -242,8 +276,16 @@ def get_jobs():
         })
 
     except Exception as e:
-        logger.error(f"Failed to get jobs: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error(f"API /api/jobs failed: {e}")
+        logger.error(f"Function: get_jobs()")
+        logger.error(f"Parameters: limit={request.args.get('limit', 50)}, status_filter={request.args.getlist('status')}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "get_jobs",
+            "endpoint": "/api/jobs"
+        }), 500
 
 
 @app.route("/api/jobs/<job_id>", methods=["GET"])
@@ -257,8 +299,17 @@ def get_job(job_id):
         return jsonify(job.to_dict())
 
     except Exception as e:
-        logger.error(f"Failed to get job {job_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error(f"API /api/jobs/{job_id} failed: {e}")
+        logger.error(f"Function: get_job()")
+        logger.error(f"Job ID: {job_id}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "get_job",
+            "endpoint": f"/api/jobs/{job_id}",
+            "job_id": job_id
+        }), 500
 
 
 @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
@@ -385,8 +436,15 @@ def get_queue_stats():
         return jsonify(stats)
 
     except Exception as e:
-        logger.error(f"Failed to get queue stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error(f"API /api/queue/stats failed: {e}")
+        logger.error(f"Function: get_queue_stats()")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "get_queue_stats",
+            "endpoint": "/api/queue/stats"
+        }), 500
 
 
 @app.route("/api/review-queue", methods=["GET"])
@@ -406,29 +464,48 @@ def get_review_queue():
                 validation = job.result.get('validation', {})
                 extracted_data = job.result.get('extracted_data', {})
                 
-                review_item = {
-                    "id": f"review_{job.id}",
-                    "job_id": job.id,
-                    "file_name": job.file_name or 'Unknown File',
-                    "employee_name": validation.get('employee_name') or extracted_data.get('employee_name', 'Unknown'),
-                    "validation_result": validation.get('validation_result', 'REQUIRES_HUMAN_REVIEW'),
-                    "validation_issues": validation.get('validation_issues', []),
-                    "total_wage": validation.get('total_wage', 0),
-                    "average_daily_rate": validation.get('average_daily_rate', 0),
-                    "total_days": validation.get('total_days', 0),
-                    "unique_days": extracted_data.get('unique_days', validation.get('total_days', 0)),
-                    "created_at": job.created_at,
-                    "status": "pending"
-                }
+                try:
+                    # Safe datetime conversion
+                    created_at_str = None
+                    if job.created_at:
+                        if hasattr(job.created_at, 'isoformat'):
+                            created_at_str = job.created_at.isoformat()
+                        else:
+                            created_at_str = str(job.created_at)
+                    
+                    review_item = {
+                        "id": f"review_{job.id}",
+                        "job_id": job.id,
+                        "file_name": job.file_name or 'Unknown File',
+                        "employee_name": validation.get('employee_name') or extracted_data.get('employee_name', 'Unknown'),
+                        "validation_result": validation.get('validation_result', 'REQUIRES_HUMAN_REVIEW'),
+                        "validation_issues": validation.get('validation_issues', []),
+                        "total_wage": validation.get('total_wage', 0),
+                        "average_daily_rate": validation.get('average_daily_rate', 0),
+                        "total_days": validation.get('total_days', 0),
+                        "unique_days": extracted_data.get('unique_days', validation.get('total_days', 0)),
+                        "created_at": created_at_str,
+                        "status": "pending"
+                    }
+                except Exception as item_error:
+                    logger.error(f"Error creating review item for job {job.id}: {item_error}")
+                    continue
                 review_items.append(review_item)
         
-        # Sort by creation date (newest first)
-        review_items.sort(key=lambda x: x["created_at"], reverse=True)
+        # Sort by creation date (newest first) - use job.created_at for sorting before conversion
+        review_items.sort(key=lambda x: x.get("created_at") or "", reverse=True)
         
         return jsonify({"review_queue": review_items, "count": len(review_items)})
     except Exception as e:
-        logger.error(f"Failed to get review queue: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error(f"API /api/review-queue failed: {e}")
+        logger.error(f"Function: get_review_queue()")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "get_review_queue",
+            "endpoint": "/api/review-queue"
+        }), 500
 
 
 @app.route("/api/jobs/<job_id>/complete-review", methods=["POST"])
@@ -468,8 +545,17 @@ def complete_review(job_id):
         })
         
     except Exception as e:
-        logger.error(f"Failed to complete review for job {job_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        logger.error(f"API /api/jobs/{job_id}/complete-review failed: {e}")
+        logger.error(f"Function: complete_review()")
+        logger.error(f"Job ID: {job_id}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "complete_review",
+            "endpoint": f"/api/jobs/{job_id}/complete-review",
+            "job_id": job_id
+        }), 500
 
 
 @app.route("/api/queue/cleanup", methods=["POST"])

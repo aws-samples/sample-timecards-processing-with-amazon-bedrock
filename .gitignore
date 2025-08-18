@@ -83,6 +83,12 @@ Thumbs.db
 *.temp
 .cache/
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+timecard_processor.db
+
 # Coverage reports
 htmlcov/
 .tox/

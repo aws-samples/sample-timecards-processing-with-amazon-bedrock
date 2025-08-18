@@ -19,8 +19,16 @@ const Settings = ({ addNotification }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [systemInfo, setSystemInfo] = useState({});
+  const [errorCount, setErrorCount] = useState(0);
+  const [hasError, setHasError] = useState(false);
 
   const fetchSettings = useCallback(async () => {
+    // Skip if we've had too many errors
+    if (errorCount >= 3) {
+      setHasError(true);
+      return;
+    }
+
     try {
       // First check if backend is reachable
       const response = await jobService.getSettings();
@@ -45,19 +53,37 @@ const Settings = ({ addNotification }) => {
       setSettings(transformedSettings);
       setSystemInfo(response.system_info || {});
       setLoading(false);
+      setErrorCount(0); // Reset error count on success
+      setHasError(false);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
+      const newErrorCount = errorCount + 1;
+      setErrorCount(newErrorCount);
 
-      // Provide more specific error messages
-      let errorMessage = 'Unknown error occurred';
-      if (error.code === 'NETWORK_ERROR' || error.message === 'Network Error') {
-        errorMessage = 'Cannot connect to backend server. Please ensure the backend is running on port 8000.';
-      } else if (error.response?.status === 500) {
-        errorMessage = 'Server error occurred while loading settings.';
-      } else if (error.response?.data?.error) {
-        errorMessage = error.response.data.error;
-      } else {
-        errorMessage = error.message;
+      // Only show notification for first error to avoid spam
+      if (errorCount === 0) {
+        // Provide more specific error messages
+        let errorMessage = 'Settings service is temporarily unavailable';
+        if (error.code === 'NETWORK_ERROR' || error.message === 'Network Error') {
+          errorMessage = 'Cannot connect to backend server. Please ensure the backend is running.';
+        } else if (error.response?.status === 500) {
+          errorMessage = 'Server error occurred while loading settings.';
+        } else if (error.response?.data?.error) {
+          errorMessage = error.response.data.error;
+        } else {
+          errorMessage = error.message;
+        }
+
+        addNotification({
+          type: 'error',
+          header: 'Settings temporarily unavailable',
+          content: errorMessage
+        });
+      }
+
+      // Stop retrying after 3 errors
+      if (newErrorCount >= 3) {
+        setHasError(true);
       }
 
       // Set default settings to prevent UI errors
@@ -76,14 +102,9 @@ const Settings = ({ addNotification }) => {
         reviewTriggers: {}
       });
 
-      addNotification({
-        type: 'error',
-        header: 'Failed to load settings',
-        content: errorMessage
-      });
       setLoading(false);
     }
-  }, [addNotification]);
+  }, [addNotification, errorCount]);
 
   useEffect(() => {
     fetchSettings();
@@ -174,6 +195,31 @@ const Settings = ({ addNotification }) => {
   ];
 
 
+
+  if (hasError) {
+    return (
+      <SpaceBetween size="l">
+        <Header variant="h1">Settings</Header>
+        <Alert
+          type="error"
+          header="Settings Service Unavailable"
+          action={
+            <Button
+              onClick={() => {
+                setErrorCount(0);
+                setHasError(false);
+                fetchSettings();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          The settings service is temporarily unavailable. This may be due to database connectivity issues.
+        </Alert>
+      </SpaceBetween>
+    );
+  }
 
   if (loading) {
     return <Box>Loading settings...</Box>;

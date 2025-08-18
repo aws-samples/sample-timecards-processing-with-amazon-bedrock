@@ -79,7 +79,7 @@ const JobDetails = ({ addNotification }) => {
 
     intervalRef.current = setInterval(() => {
       fetchJob();
-    }, 3000);
+    }, 10000); // Increased from 3s to 10s
   }, [fetchJob]);
 
   // Stop polling function
@@ -857,6 +857,27 @@ const JobDetails = ({ addNotification }) => {
                 Complete Review
               </Button>
             )}
+            <Button 
+              iconName="download"
+              onClick={async () => {
+                try {
+                  await jobService.downloadJobFile(job.id, job.file_name);
+                  addNotification({
+                    type: 'success',
+                    header: 'Download started',
+                    content: `Downloading ${job.file_name || 'file'}...`
+                  });
+                } catch (error) {
+                  addNotification({
+                    type: 'error',
+                    header: 'Download failed',
+                    content: error.response?.data?.error || error.message
+                  });
+                }
+              }}
+            >
+              Download File
+            </Button>
             <Button onClick={fetchJob}>Refresh</Button>
             {job?.status === 'pending' && (
               <Button onClick={() => setShowCancelModal(true)}>

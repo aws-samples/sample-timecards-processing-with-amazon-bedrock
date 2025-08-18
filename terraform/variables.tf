@@ -43,31 +43,56 @@ variable "availability_zones" {
 variable "ecs_task_cpu" {
   description = "CPU units for ECS task"
   type        = number
-  default     = 512
+  default     = 2048  # Increased from 512 to 2048 (2 vCPU)
 }
 
 variable "ecs_task_memory" {
   description = "Memory for ECS task"
   type        = number
-  default     = 1024
+  default     = 4096  # Increased from 1024 to 4096 (4 GB)
+}
+
+# Security feature toggles
+variable "enable_vpc_flow_logs" {
+  description = "Enable VPC Flow Logs"
+  type        = bool
+  default     = false
+}
+
+variable "enable_guardduty" {
+  description = "Enable GuardDuty"
+  type        = bool
+  default     = false
+}
+
+variable "enable_config" {
+  description = "Enable AWS Config"
+  type        = bool
+  default     = false
+}
+
+variable "enable_cloudtrail" {
+  description = "Enable CloudTrail"
+  type        = bool
+  default     = false
 }
 
 variable "ecs_desired_count" {
   description = "Desired number of ECS tasks"
   type        = number
-  default     = 2
+  default     = 3  # Increased from 2 to 3
 }
 
 variable "ecs_min_capacity" {
   description = "Minimum number of ECS tasks"
   type        = number
-  default     = 1
+  default     = 2  # Increased from 1 to 2
 }
 
 variable "ecs_max_capacity" {
   description = "Maximum number of ECS tasks"
   type        = number
-  default     = 10
+  default     = 15  # Increased from 10 to 15
 }
 
 variable "enable_auto_scaling" {

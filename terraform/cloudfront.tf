@@ -16,7 +16,7 @@ resource "aws_cloudfront_distribution" "main" {
     origin_id                = "S3-${aws_s3_bucket.static_assets.bucket}"
   }
 
-  # ALB Origin for API
+  # ALB Origin for API with custom header for security
   origin {
     domain_name = aws_lb.main.dns_name
     origin_id   = "ALB-${var.project_name}"
@@ -26,6 +26,12 @@ resource "aws_cloudfront_distribution" "main" {
       https_port             = 443
       origin_protocol_policy = "http-only"
       origin_ssl_protocols   = ["TLSv1.2"]
+    }
+
+    # Add custom header to identify CloudFront requests
+    custom_header {
+      name  = "X-CloudFront-Secret"
+      value = random_password.cloudfront_secret.result
     }
   }
 
@@ -104,6 +110,9 @@ resource "aws_cloudfront_distribution" "main" {
   }
 
   aliases = var.domain_name != "" ? [var.domain_name] : []
+
+  # Associate with WAF
+  web_acl_id = aws_wafv2_web_acl.cloudfront.arn
 
   tags = var.tags
 }

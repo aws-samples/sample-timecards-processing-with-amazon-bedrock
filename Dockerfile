@@ -1,22 +1,4 @@
-# Multi-stage build for React + Flask single container
-FROM node:18-alpine AS frontend-build
-
-# Set working directory for frontend
-WORKDIR /app/frontend
-
-# Copy package files
-COPY frontend/package*.json ./
-
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy frontend source
-COPY frontend/ ./
-
-# Build React app
-RUN npm run build
-
-# Production stage
+# Backend-only container for ECS Fargate
 FROM python:3.11-slim
 
 # Set working directory
@@ -37,10 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source
 COPY backend/ ./
 
-# Copy built frontend from previous stage
-COPY --from=frontend-build /app/frontend/build ./static
-
-# Create uploads directory
+# Create necessary directories
 RUN mkdir -p uploads data sample
 
 # Copy sample data
@@ -54,6 +33,7 @@ EXPOSE 8080
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \

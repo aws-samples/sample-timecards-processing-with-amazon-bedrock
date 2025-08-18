@@ -36,27 +36,58 @@ const JobsTable = ({ addNotification }) => {
   const [deletingJobs, setDeletingJobs] = useState(false);
 
 
+  const [errorCount, setErrorCount] = useState(0);
+  const [hasError, setHasError] = useState(false);
+
   const fetchJobs = useCallback(async () => {
+    // Skip if we've had too many errors
+    if (errorCount >= 5) {
+      setHasError(true);
+      return;
+    }
+
     try {
       const data = await jobService.getJobs({ limit: 100 });
       setJobs(data.jobs || []);
       setLoading(false);
+      setErrorCount(0); // Reset error count on success
+      setHasError(false);
     } catch (error) {
       console.error('Failed to fetch jobs:', error);
-      addNotification({
-        type: 'error',
-        header: 'Failed to load jobs',
-        content: error.message
-      });
+      const newErrorCount = errorCount + 1;
+      setErrorCount(newErrorCount);
+      
+      // Only show notification for first error to avoid spam
+      if (errorCount === 0) {
+        addNotification({
+          type: 'error',
+          header: 'Jobs temporarily unavailable',
+          content: 'The jobs service is experiencing issues. Please try again later.'
+        });
+      }
+      
+      // Stop polling after 5 errors
+      if (newErrorCount >= 5) {
+        setHasError(true);
+      }
+      
       setLoading(false);
     }
-  }, [addNotification]);
+  }, [addNotification, errorCount]);
 
   useEffect(() => {
     fetchJobs();
-    const interval = setInterval(fetchJobs, 5000); // Refresh every 5 seconds
-    return () => clearInterval(interval);
-  }, [fetchJobs]);
+    
+    // Only set up polling if we don't have persistent errors
+    if (!hasError) {
+      const interval = setInterval(() => {
+        if (errorCount < 5) {
+          fetchJobs();
+        }
+      }, 15000); // Refresh every 15 seconds (reduced frequency)
+      return () => clearInterval(interval);
+    }
+  }, [fetchJobs, hasError, errorCount]);
 
 
 
@@ -273,6 +304,31 @@ const JobsTable = ({ addNotification }) => {
 
   const filteredJobs = getFilteredJobs();
   const paginatedJobs = getPaginatedJobs();
+
+  if (hasError) {
+    return (
+      <SpaceBetween size="l">
+        <Header variant="h1">Jobs</Header>
+        <Alert
+          type="error"
+          header="Jobs Service Unavailable"
+          action={
+            <Button
+              onClick={() => {
+                setErrorCount(0);
+                setHasError(false);
+                fetchJobs();
+              }}
+            >
+              Retry
+            </Button>
+          }
+        >
+          The jobs service is temporarily unavailable. This may be due to database connectivity issues.
+        </Alert>
+      </SpaceBetween>
+    );
+  }
 
   return (
     <SpaceBetween size="l">
