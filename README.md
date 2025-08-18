@@ -1,6 +1,6 @@
-# Timecard Processing System
+# Timecard Processing with Amazon Bedrock
 
-A scalable, AI-powered timecard processing system built on AWS with automated compliance validation and human-in-the-loop review capabilities.
+A scalable, AI-powered timecard processing system built on Amazon Bedrock with [Automated Reasoning](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-automated-reasoning-checks.html) validation and human-in-the-loop review capabilities.
 
 ## Architecture Overview
 
@@ -711,7 +711,10 @@ For questions, issues, or contributions:
 
 1. Check existing [Issues](../../issues)
 2. Create a new issue with detailed description
-3. For security issues, please email [security@example.com](mailto:security@example.com)
+
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
 
 ## Additional Resources
 
