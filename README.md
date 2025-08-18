@@ -229,8 +229,8 @@ When AI services are unavailable, the system can optionally route jobs directly 
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd timecard-processing-system
+git clone https://github.com/aws-samples/sample-timecards-processing-with-amazon-bedrock
+cd sample-timecards-processing-with-amazon-bedrock
 
 # Backend setup
 cd backend
@@ -703,18 +703,18 @@ terraform apply -target="null_resource.ecs_service_update"
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/aws-samples/sample-timecards-processing-with-amazon-bedrock/blob/main/LICENSE) file for details.
 
 ## Support
 
 For questions, issues, or contributions:
 
-1. Check existing [Issues](../../issues)
+1. Check existing [Issues](https://github.com/aws-samples/sample-timecards-processing-with-amazon-bedrock/issues)
 2. Create a new issue with detailed description
 
 ## Security
 
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
+See [CONTRIBUTING](https://github.com/aws-samples/sample-timecards-processing-with-amazon-bedrock/blob/main/CONTRIBUTING.md#security-issue-notifications) for more information.
 
 ## Additional Resources
 
