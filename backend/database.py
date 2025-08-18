@@ -6,7 +6,7 @@ SQLAlchemy-based database models and management for timecard processing system
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -58,9 +58,9 @@ class JobModel(Base):
     priority = Column(Integer, nullable=False)
     file_name = Column(String(255), nullable=False)
     file_size = Column(BigInteger, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
     started_at = Column(DateTime)
     completed_at = Column(DateTime)
@@ -78,7 +78,7 @@ class SettingsModel(Base):
     key = Column(String(100), primary_key=True)
     value = Column(JSON, nullable=False)
     updated_at = Column(
-        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
 
@@ -224,7 +224,7 @@ class DatabaseManager:
                 )
 
                 if job_model:
-                    now = datetime.utcnow()
+                    now = datetime.now(timezone.utc)
                     job_model.status = JobStatus.PROCESSING.value
                     job_model.updated_at = now
                     job_model.started_at = now
@@ -255,7 +255,7 @@ class DatabaseManager:
                 if not job_model:
                     raise ValueError(f"Job {job_id} not found")
 
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 job_model.status = status.value
                 job_model.updated_at = now
 
@@ -298,7 +298,7 @@ class DatabaseManager:
                     .update(
                         {
                             "status": JobStatus.CANCELLED.value,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": datetime.now(timezone.utc),
                         }
                     )
                 )
@@ -425,7 +425,7 @@ class DatabaseManager:
     def cleanup_old_jobs(self, days: int = 7):
         """Clean up old completed jobs"""
         try:
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
 
             with self.get_session() as session:
                 result = (
@@ -498,7 +498,7 @@ class DatabaseManager:
 
                 if setting:
                     setting.value = value
-                    setting.updated_at = datetime.utcnow()
+                    setting.updated_at = datetime.now(timezone.utc)
                 else:
                     setting = SettingsModel(key=key, value=value)
                     session.add(setting)

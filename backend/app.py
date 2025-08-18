@@ -10,7 +10,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -527,7 +527,7 @@ def complete_review(job_id):
             updated_result['validation'] = {}
         
         updated_result['validation']['review_completed'] = True
-        updated_result['validation']['review_completed_at'] = datetime.utcnow().isoformat()
+        updated_result['validation']['review_completed_at'] = datetime.now(timezone.utc).isoformat()
         updated_result['validation']['validation_result'] = 'REVIEWED'
         
         # Update job in database
