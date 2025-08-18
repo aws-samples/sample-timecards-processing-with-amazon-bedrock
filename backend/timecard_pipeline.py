@@ -36,10 +36,25 @@ class WageCompliance:
 
 
 class TimecardPipeline:
-    def __init__(self, region="us-west-2"):
+    def __init__(self, config_manager=None):
+        self.config = config_manager
+
+        # Initialize AWS clients with configuration
+        region = self.config.aws_region if self.config else "us-west-2"
         self.bedrock = boto3.client("bedrock-runtime", region_name=region)
         self.guardrails = boto3.client("bedrock", region_name=region)
-        self.compliance = WageCompliance()
+
+        # Initialize compliance rules from configuration
+        if self.config:
+            self.compliance = WageCompliance(
+                federal_minimum_wage=self.config.federal_minimum_wage,
+                overtime_threshold=self.config.overtime_threshold_hours,
+                max_weekly_hours=self.config.max_recommended_hours_weekly,
+                salary_exempt_threshold=self.config.salary_exempt_threshold_weekly,
+            )
+        else:
+            self.compliance = WageCompliance()
+
         self.review_queue = []
 
     def step1_excel_to_markdown(self, excel_path: str) -> str:
@@ -148,60 +163,126 @@ class TimecardPipeline:
         """
 
         try:
-            response = self.bedrock.invoke_model(
-                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
-                body=json.dumps(
-                    {
-                        "anthropic_version": "bedrock-2023-05-31",
-                        "max_tokens": 64000,
-                        "thinking": {"type": "enabled", "budget_tokens": 2000},
-                        "messages": [{"role": "user", "content": prompt}],
+            # Define the tool schema for structured output
+            tool_schema = {
+                "name": "extract_timecard_data",
+                "description": "Extract structured timecard data from the provided markdown",
+                "inputSchema": {
+                    "json": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {
+                            "employee_name": {
+                                "type": "string",
+                                "description": "Primary employee name",
+                            },
+                            "employee_count": {
+                                "type": "integer",
+                                "description": "Total number of employees",
+                            },
+                            "employee_list": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of all employee names",
+                            },
+                            "total_timecards": {
+                                "type": "integer",
+                                "description": "Total number of timecard entries",
+                            },
+                            "total_days": {
+                                "type": "integer",
+                                "description": "Total working days",
+                            },
+                            "total_wage": {
+                                "type": "number",
+                                "description": "Total wage amount",
+                            },
+                            "average_daily_rate": {
+                                "type": "number",
+                                "description": "Average daily rate",
+                            },
+                            "pay_period_start": {
+                                "type": "string",
+                                "description": "Pay period start date (YYYY-MM-DD)",
+                            },
+                            "pay_period_end": {
+                                "type": "string",
+                                "description": "Pay period end date (YYYY-MM-DD)",
+                            },
+                            "daily_entries": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "prefixItems": [
+                                        {"type": "string", "description": "Employee name"},
+                                        {"type": "string", "description": "Date (YYYY-MM-DD)"},
+                                        {"type": "number", "description": "Daily rate"},
+                                        {"type": "string", "description": "Project/Show"},
+                                        {"type": "string", "description": "Department"}
+                                    ]
+                                },
+                                "description": "Array of daily entries [employee, date, rate, project, department]",
+                            },
+                        },
+                        "required": [
+                            "employee_name",
+                            "employee_count",
+                            "total_timecards",
+                            "total_days",
+                            "total_wage",
+                            "average_daily_rate",
+                            "daily_entries",
+                        ],
                     }
-                ),
+                },
+            }
+
+            # Use Converse API with Tool Use
+            response = self.bedrock.converse(
+                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                toolConfig={"tools": [{"toolSpec": tool_schema}]},
+                inferenceConfig={"maxTokens": 64000, "temperature": 0.1, "topP": 1},
             )
 
-            result = json.loads(response["body"].read())
+            # Extract tool use result
+            output_message = response["output"]["message"]
 
-            # Find the text content (skip thinking content)
-            text_content = None
-            for content_item in result["content"]:
-                if content_item.get("type") == "text":
-                    text_content = content_item["text"].strip()
+            if "content" not in output_message:
+                raise Exception("No content in response")
+
+            tool_use_content = None
+            for content_item in output_message["content"]:
+                if content_item.get("toolUse"):
+                    tool_use_content = content_item["toolUse"]["input"]
                     break
 
-            if not text_content:
-                raise Exception("No text content found in LLM response")
+            if not tool_use_content:
+                # Fallback to text content if no tool use
+                text_content = None
+                for content_item in output_message["content"]:
+                    if content_item.get("text"):
+                        text_content = content_item["text"].strip()
+                        break
 
-            logger.info(f"LLM response text length: {len(text_content)} characters")
+                if text_content:
+                    # Try to parse JSON from text
+                    if text_content.startswith("```"):
+                        text_content = (
+                            text_content.replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
+                    extracted = json.loads(text_content)
+                else:
+                    raise Exception("No tool use or text content found in response")
+            else:
+                extracted = tool_use_content
 
-            # Clean response
-            if text_content.startswith("```"):
-                text_content = (
-                    text_content.replace("```json", "").replace("```", "").strip()
-                )
+            extracted["extraction_method"] = "tool_use"
 
-            extracted = json.loads(text_content)
-            extracted["extraction_method"] = "llm_extraction"
-
-            daily_entries_count = len(extracted.get("daily_entries", []))
-            logger.info(
-                f"LLM extracted: {extracted.get('employee_count', 0)} employees, {extracted.get('total_timecards', 0)} timecards, {daily_entries_count} daily_entries"
-            )
-
-            # Debug: Log first few entries to see the format
-            if daily_entries_count > 0:
-                logger.info(f"Sample daily_entries (first 3):")
-                for i, entry in enumerate(extracted.get("daily_entries", [])[:3]):
-                    logger.info(f"  Entry {i+1}: {entry}")
-
-            # Check for discrepancy between total_timecards and daily_entries length
-            total_timecards = extracted.get("total_timecards", 0)
-            if total_timecards != daily_entries_count:
-                logger.warning(
-                    f"DISCREPANCY: total_timecards={total_timecards} but daily_entries length={daily_entries_count}"
-                )
-                # Fix the discrepancy by using actual daily_entries count
-                extracted["total_timecards"] = daily_entries_count
+            # Post-process and validate the extracted data
+            extracted = self._post_process_extracted_data(extracted)
 
             return extracted
 
@@ -214,6 +295,7 @@ class TimecardPipeline:
                 "employee_list": [],
                 "total_timecards": 0,
                 "total_days": 0,
+                "unique_days": 0,
                 "total_wage": 0.0,
                 "average_daily_rate": 0.0,
                 "pay_period_start": "2025-01-01",
@@ -223,6 +305,72 @@ class TimecardPipeline:
                 "error": str(e),
             }
 
+    def _post_process_extracted_data(self, extracted: Dict[str, Any]) -> Dict[str, Any]:
+        """Post-process extracted data to ensure accuracy"""
+        daily_entries = extracted.get("daily_entries", [])
+
+        if not daily_entries:
+            return extracted
+
+        # Calculate accurate statistics from daily_entries
+        total_timecards = len(daily_entries)
+
+        # Get unique dates and employees
+        unique_dates = set()
+        unique_employees = set()
+        total_wage = 0.0
+
+        for entry in daily_entries:
+            if len(entry) >= 5:
+                employee_name = entry[0]
+                date = entry[1]
+                daily_rate = float(entry[2]) if entry[2] else 0.0
+
+                unique_employees.add(employee_name)
+                unique_dates.add(date)
+                total_wage += daily_rate
+
+        unique_days = len(unique_dates)
+        employee_count = len(unique_employees)
+        employee_list = list(unique_employees)
+
+        # Calculate date range
+        sorted_dates = sorted(list(unique_dates))
+        pay_period_start = sorted_dates[0] if sorted_dates else "N/A"
+        pay_period_end = sorted_dates[-1] if sorted_dates else "N/A"
+
+        # Calculate average daily rate
+        average_daily_rate = (
+            total_wage / total_timecards if total_timecards > 0 else 0.0
+        )
+
+        # Update extracted data with corrected values
+        extracted.update(
+            {
+                "total_timecards": total_timecards,
+                "total_days": total_timecards,  # Keep this for backward compatibility
+                "unique_days": unique_days,  # New field for actual unique days
+                "employee_count": employee_count,
+                "employee_list": employee_list,
+                "employee_name": (
+                    employee_list[0]
+                    if len(employee_list) == 1
+                    else f"Multiple Employees ({employee_count})"
+                ),
+                "total_wage": round(total_wage, 2),
+                "average_daily_rate": round(average_daily_rate, 2),
+                "pay_period_start": pay_period_start,
+                "pay_period_end": pay_period_end,
+            }
+        )
+
+        logger.info(
+            f"Post-processed data: {employee_count} employees, {total_timecards} timecards, "
+            f"{unique_days} unique days, ${total_wage:.2f} total wage"
+        )
+
+        return extracted
+
     def step3_automated_reasoning(
         self, extracted_data: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -231,6 +379,7 @@ class TimecardPipeline:
         # Extract key data with safe conversion
         employee_name = extracted_data.get("employee_name", "Unknown")
         total_days = int(extracted_data.get("total_days") or 0)
+        unique_days = int(extracted_data.get("unique_days", total_days) or 0)
         average_daily_rate = float(extracted_data.get("average_daily_rate") or 0)
         total_wage = float(extracted_data.get("total_wage") or 0)
 
@@ -306,6 +455,7 @@ class TimecardPipeline:
             "validation_result": final_result.value,
             "employee_name": employee_name,
             "total_days": total_days,
+            "unique_days": unique_days,
             "average_daily_rate": average_daily_rate,
             "total_wage": total_wage,
             "weekly_equivalent": weekly_equivalent,
@@ -315,7 +465,7 @@ class TimecardPipeline:
             "requires_human_review": requires_human_review,
             "reasoning_confidence": reasoning_result.get("confidence", 0.0),
             "compliance_summary": self._generate_compliance_summary(
-                total_days,
+                unique_days,
                 average_daily_rate,
                 is_salary_exempt,
                 weekly_equivalent,
@@ -325,7 +475,8 @@ class TimecardPipeline:
             "federal_compliance": {
                 "minimum_wage_met": hourly_equivalent
                 >= self.compliance.federal_minimum_wage,
-                "daily_rate_compliant": average_daily_rate >= (self.compliance.federal_minimum_wage * 8),
+                "daily_rate_compliant": average_daily_rate
+                >= (self.compliance.federal_minimum_wage * 8),
                 "days_within_limit": weekly_days <= 6,
                 "salary_exempt_threshold_met": (
                     weekly_equivalent >= self.compliance.salary_exempt_threshold
@@ -334,8 +485,6 @@ class TimecardPipeline:
                 ),
             },
         }
-
-
 
     def _calculate_daily_rate_pay(
         self,
@@ -397,33 +546,88 @@ class TimecardPipeline:
         """
 
         try:
-            response = self.bedrock.invoke_model(
-                # modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
-                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
-                body=json.dumps(
-                    {
-                        "anthropic_version": "bedrock-2023-05-31",
-                        "max_tokens": 1000,
-                        "messages": [{"role": "user", "content": validation_prompt}],
+            # Define the validation tool schema
+            validation_tool_schema = {
+                "name": "validate_timecard_compliance",
+                "description": "Validate timecard compliance with federal wage laws",
+                "inputSchema": {
+                    "json": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {
+                            "result": {
+                                "type": "string",
+                                "enum": ["VALID", "INVALID", "SATISFIABLE"],
+                                "description": "Validation result",
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "minimum": 0.0,
+                                "maximum": 1.0,
+                                "description": "Confidence level in the validation",
+                            },
+                            "reasoning": {
+                                "type": "string",
+                                "description": "Detailed explanation of the validation decision",
+                            },
+                            "compliance_issues": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "List of compliance issues found",
+                            },
+                        },
+                        "required": [
+                            "result",
+                            "confidence",
+                            "reasoning",
+                            "compliance_issues",
+                        ],
                     }
-                ),
+                },
+            }
+
+            # Use Converse API with Tool Use for validation
+            response = self.bedrock.converse(
+                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+                messages=[{"role": "user", "content": [{"text": validation_prompt}]}],
+                toolConfig={"tools": [{"toolSpec": validation_tool_schema}]},
+                inferenceConfig={"maxTokens": 1000, "temperature": 0.1, "topP": 1},
             )
 
-            result = json.loads(response["body"].read())
-            content = result["content"][0]["text"]
+            # Extract tool use result
+            output_message = response["output"]["message"]
 
-            # Parse JSON response
-            try:
-                if content.startswith("```"):
-                    content = content.replace("```json", "").replace("```", "").strip()
-                return json.loads(content)
-            except:
-                return {
-                    "result": "SATISFIABLE",
-                    "confidence": 0.5,
-                    "reasoning": content,
-                    "compliance_issues": [],
-                }
+            if "content" not in output_message:
+                raise Exception("No content in validation response")
+
+            tool_use_content = None
+            for content_item in output_message["content"]:
+                if content_item.get("toolUse"):
+                    tool_use_content = content_item["toolUse"]["input"]
+                    break
+
+            if not tool_use_content:
+                # Fallback to text content
+                text_content = None
+                for content_item in output_message["content"]:
+                    if content_item.get("text"):
+                        text_content = content_item["text"].strip()
+                        break
+
+                if text_content:
+                    if text_content.startswith("```"):
+                        text_content = (
+                            text_content.replace("```json", "")
+                            .replace("```", "")
+                            .strip()
+                        )
+                    return json.loads(text_content)
+                else:
+                    raise Exception(
+                        "No tool use or text content found in validation response"
+                    )
+
+            return tool_use_content
 
         except Exception as e:
             logger.error(f"Automated reasoning error: {e}")
@@ -445,12 +649,12 @@ class TimecardPipeline:
         """Generate human-readable compliance summary"""
         if not issues:
             if is_exempt:
-                return f"✅ Compliant: Salary-exempt employee (${weekly_equivalent:.2f}/week equivalent)"
+                return f"Compliant: Salary-exempt employee (${weekly_equivalent:.2f}/week equivalent)"
             else:
                 weekly_days = days / 7 if days > 0 else 0
-                return f"✅ Compliant: {days} days worked ({weekly_days:.1f} days/week) at ${daily_rate:.2f}/day"
+                return f"Compliant: {days} days worked ({weekly_days:.1f} days/week) at ${daily_rate:.2f}/day"
         else:
-            return f"❌ Non-compliant: {len(issues)} issues found"
+            return f"Non-compliant: {len(issues)} issues found"
 
     def _get_next_actions(
         self, result: ValidationResult, issues: List[str]
@@ -459,21 +663,21 @@ class TimecardPipeline:
         actions = []
 
         if result == ValidationResult.REQUIRES_HUMAN_REVIEW:
-            actions.append("🔍 Route to HR manager for review")
-            actions.append("📋 Verify job classification and duties")
+            actions.append("Route to HR manager for review")
+            actions.append("Verify job classification and duties")
 
         if result == ValidationResult.INVALID:
-            actions.append("❌ Reject timecard - corrections needed")
-            actions.append("📧 Notify employee and supervisor")
+            actions.append("Reject timecard - corrections needed")
+            actions.append("Notify employee and supervisor")
 
         if "below federal minimum" in str(issues):
-            actions.append("💰 Adjust hourly rate to meet federal minimum")
+            actions.append("Adjust hourly rate to meet federal minimum")
 
         if "Excessive hours" in str(issues):
-            actions.append("⏰ Obtain management approval for overtime")
+            actions.append("Obtain management approval for overtime")
 
         if not actions:
-            actions.append("✅ Approve timecard for payroll processing")
+            actions.append("Approve timecard for payroll processing")
 
         return actions
 

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@cloudscape-design/code-view": "^3.0.68"
+  }
+}
