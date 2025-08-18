@@ -68,7 +68,7 @@ def job_processor():
             
             job = job_queue.get_next_job()
             if not job:
-                time.sleep(2)  # Wait 2 seconds before checking again
+                time.sleep(0.5)  # Wait 0.5 seconds before checking again
                 continue
             
             logger.info(f"Processing job {job.id}: {job.type}")
@@ -86,14 +86,14 @@ def job_processor():
                         if not file_path or not Path(file_path).exists():
                             raise Exception("File not found")
                         
-                        # Update progress
-                        job_queue.update_job_status(job.id, JobStatus.PROCESSING, progress=25)
+                        # Update progress - Step 1: Excel to Markdown
+                        job_queue.update_job_status(job.id, JobStatus.PROCESSING, progress=10)
                         
                         # Process through pipeline
                         result = pipeline.process(file_path)
                         
-                        # Update progress
-                        job_queue.update_job_status(job.id, JobStatus.PROCESSING, progress=75)
+                        # Update progress - Almost complete
+                        job_queue.update_job_status(job.id, JobStatus.PROCESSING, progress=90)
                         
                         # Clean up uploaded file (only if not a sample)
                         is_sample = job.metadata.get("is_sample", False) if job.metadata else False
@@ -190,13 +190,20 @@ def upload_file():
 
         logger.info(f"File uploaded: {filename} ({file_size} bytes)")
 
-        # Create job
+        # Create job with model information
         job_id = job_queue.create_job(
             job_type="timecard_processing",
             file_name=filename,
             file_size=file_size,
             priority=JobPriority.NORMAL,
-            metadata={"file_path": str(file_path), "original_filename": filename}
+            metadata={
+                "file_path": str(file_path), 
+                "original_filename": filename,
+                "model_info": {
+                    "model_id": config_manager.bedrock_model_id,
+                    "aws_region": config_manager.aws_region
+                }
+            }
         )
 
         return jsonify({
@@ -603,7 +610,15 @@ def process_sample(filename):
             file_name=filename,
             file_size=file_size,
             priority=JobPriority.HIGH,  # Sample files get high priority
-            metadata={"file_path": str(sample_path), "original_filename": filename, "is_sample": True}
+            metadata={
+                "file_path": str(sample_path), 
+                "original_filename": filename, 
+                "is_sample": True,
+                "model_info": {
+                    "model_id": config_manager.bedrock_model_id,
+                    "aws_region": config_manager.aws_region
+                }
+            }
         )
 
         return jsonify({

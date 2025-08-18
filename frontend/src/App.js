@@ -13,9 +13,6 @@ import {
   Flashbar
 } from '@cloudscape-design/components';
 
-// Components
-import Footer from './components/Footer';
-
 // Pages
 import Dashboard from './pages/Dashboard';
 import JobsTable from './pages/JobsTable';
@@ -248,8 +245,6 @@ function AppContent() {
           }
         />
       </div>
-
-      <Footer />
     </div>
   );
 }

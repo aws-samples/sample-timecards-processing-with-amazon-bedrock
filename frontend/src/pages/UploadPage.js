@@ -289,7 +289,7 @@ const UploadPage = ({ addNotification }) => {
         <ColumnLayout columns={2}>
           <div>
             <Box variant="h3">Supported File Types</Box>
-            <ul>
+            <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
               <li>Excel files (.xlsx, .xls)</li>
               <li>Excel macro-enabled (.xlsm)</li>
               <li>CSV files (.csv)</li>
@@ -297,7 +297,7 @@ const UploadPage = ({ addNotification }) => {
           </div>
           <div>
             <Box variant="h3">File Requirements</Box>
-            <ul>
+            <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
               <li>Maximum file size: 16MB</li>
               <li>Must contain timecard data</li>
               <li>Employee names and hours required</li>

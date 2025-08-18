@@ -26,13 +26,15 @@ AWS Console-style timecard processing system with AI-powered validation and job 
 - ✅ **File Persistence**: Stateless design survives app restarts
 
 ### AI-Powered Extraction
-- ✅ **Claude Sonnet 4**: Latest AI model for accurate data extraction
+- ✅ **Multiple Claude Models**: Support for Claude Opus 4.1, Sonnet 4, and 3.7 Sonnet
+- ✅ **Configurable Model Selection**: Choose AI model based on complexity and cost requirements
 - ✅ **Token Optimization**: Compact array format reduces usage by 60%
 - ✅ **Daily Rate System**: Entertainment industry-compliant wage calculations
 - ✅ **Multi-format Support**: Excel (.xlsx, .xls, .xlsm) and CSV files
 
 ### Compliance & Validation
-- ✅ **Federal Wage Laws**: Automatic minimum wage and overtime validation
+- ✅ **Configurable Compliance Rules**: Editable federal wage laws and thresholds
+- ✅ **Dynamic Validation**: Real-time compliance checking with custom parameters
 - ✅ **Human Review Queue**: Complex cases routed for manual review
 - ✅ **Audit Trail**: Complete processing history and validation results
 - ✅ **Risk Assessment**: Priority-based review assignment
@@ -42,7 +44,8 @@ AWS Console-style timecard processing system with AI-powered validation and job 
 - ✅ **Job Table**: Advanced filtering, sorting, and bulk operations
 - ✅ **Upload Interface**: Drag-and-drop with progress tracking
 - ✅ **Review Queue**: Streamlined validation workflow
-- ✅ **Settings**: System configuration and maintenance tools
+- ✅ **Advanced Settings**: Configurable compliance rules, model selection, and system parameters
+- ✅ **System Information**: Real-time platform detection and browser information
 
 ## 📊 Dashboard Features
 
@@ -122,6 +125,7 @@ aws bedrock put-model-invocation-logging-configuration \
 ```bash
 # Backend
 export AWS_REGION=us-west-2
+export CLAUDE_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
 export FLASK_ENV=development
 export PORT=8000
 
@@ -129,10 +133,27 @@ export PORT=8000
 export REACT_APP_API_URL=http://localhost:8000
 ```
 
-### Job Queue Settings
-- **Max Concurrent Jobs**: 3 (configurable)
-- **Auto Cleanup**: 7 days (configurable)
-- **File Persistence**: `job_data/` directory
+### Configurable Settings (via UI)
+
+#### Job Processing
+- **Max Concurrent Jobs**: 1-10 jobs (default: 3)
+- **Auto Cleanup**: 1-30 days (default: 7)
+- **Notifications**: Enable/disable job status notifications
+
+#### AWS Configuration
+- **Region Selection**: US East 1, US West 2, EU West 1, AP Southeast 1
+- **Claude Model**: Choose from Opus 4.1, Sonnet 4, or 3.7 Sonnet
+- **Credentials**: Environment variables or IAM roles
+
+#### Compliance Rules (Editable)
+- **Federal Minimum Wage**: $7.25/hour (configurable)
+- **Overtime Threshold**: 40 hours/week (configurable)
+- **Salary Exempt Threshold**: $684/week (configurable)
+- **Max Recommended Hours**: 60 hours/week (configurable)
+
+### File Storage
+- **Upload Directory**: `uploads/` (auto-cleanup)
+- **Database**: SQLite with settings persistence
 - **Upload Limit**: 16MB per file
 
 ## 📋 API Endpoints
@@ -148,9 +169,42 @@ export REACT_APP_API_URL=http://localhost:8000
 - `POST /api/queue/cleanup` - Clean old jobs
 - `GET /api/review-queue` - Human review items
 
+### Settings Management
+- `GET /api/settings` - Get all system settings
+- `POST /api/settings` - Update multiple settings
+- `GET /api/settings/{key}` - Get specific setting
+- `PUT /api/settings/{key}` - Update specific setting
+
 ### Sample Files
 - `GET /api/samples` - List sample files
 - `GET /api/process-sample/{filename}` - Process sample file
+
+## ⚙️ Advanced Configuration
+
+### Claude Model Selection
+Choose the optimal AI model based on your needs:
+
+| Model | Use Case | Speed | Accuracy | Cost |
+|-------|----------|-------|----------|------|
+| **Claude Opus 4.1** | Complex timecards, high accuracy required | Slow | Highest | High |
+| **Claude Sonnet 4** | General purpose, balanced performance | Medium | High | Medium |
+| **Claude 3.7 Sonnet** | Simple timecards, cost optimization | Fast | Good | Low |
+
+### Compliance Rule Customization
+Adapt the system to your organization's requirements:
+
+- **Minimum Wage**: Set custom rates above federal minimum
+- **Overtime Rules**: Configure weekly hour thresholds
+- **Salary Thresholds**: Adjust exempt employee limits
+- **Review Triggers**: Set custom flagging criteria
+
+### System Monitoring
+Built-in monitoring and health checks:
+
+- **Platform Detection**: Automatic Mac ARM/Intel detection
+- **Browser Compatibility**: Real-time browser information
+- **AWS Status**: Credential and service validation
+- **Model Availability**: Bedrock model access verification
 
 ## 🎯 Usage Examples
 
@@ -173,6 +227,14 @@ export REACT_APP_API_URL=http://localhost:8000
 3. View validation issues and timecard data
 4. Approve or reject with comments
 
+### Settings Configuration
+1. Navigate to Settings page
+2. Configure compliance rules (wages, thresholds)
+3. Select preferred Claude model
+4. Set AWS region and processing limits
+5. Enable/disable auto-cleanup and notifications
+6. Save settings (persisted in database)
+
 ## 🔍 Monitoring & Troubleshooting
 
 ### Health Check
@@ -193,11 +255,12 @@ curl http://localhost:8000/
 
 ## 🏢 Enterprise Features
 
-### Compliance
-- Federal minimum wage validation ($7.25/hour)
-- Overtime threshold monitoring (40 hours/week)
-- Salary exempt validation ($684/week)
-- Excessive hours flagging (>60 hours/week)
+### Compliance (Configurable)
+- **Federal minimum wage validation**: Configurable rate (default: $7.25/hour)
+- **Overtime threshold monitoring**: Configurable hours (default: 40 hours/week)
+- **Salary exempt validation**: Configurable threshold (default: $684/week)
+- **Excessive hours flagging**: Configurable limit (default: 60 hours/week)
+- **Real-time rule updates**: Changes apply immediately to new jobs
 
 ### Audit Trail
 - Complete job processing history
@@ -236,17 +299,23 @@ aws apprunner create-service --cli-input-json file://apprunner.yaml
 ## 📈 Performance
 
 ### Optimization Features
-- Token-optimized LLM prompts (60% reduction)
-- Compact array format for data transfer
-- Real-time progress updates
-- Efficient job queue management
-- Background processing threads
+- **Token-optimized LLM prompts**: 60% reduction in API costs
+- **Compact array format**: Efficient data transfer
+- **Real-time progress updates**: WebSocket-like responsiveness
+- **Efficient job queue management**: SQLite-based persistence
+- **Background processing threads**: Non-blocking operations
+
+### Model Performance Comparison
+- **Claude Opus 4.1**: Highest accuracy, slower processing, higher cost
+- **Claude Sonnet 4**: Balanced performance, recommended for most use cases
+- **Claude 3.7 Sonnet**: Faster processing, lower cost, good for simple timecards
 
 ### Scalability Metrics
-- Processing: 3 concurrent jobs (configurable)
-- Throughput: ~10-20 files per minute
-- File size: Up to 16MB per upload
-- Queue capacity: Unlimited (file-based)
+- **Processing**: 1-10 concurrent jobs (configurable via UI)
+- **Throughput**: ~10-20 files per minute (model-dependent)
+- **File size**: Up to 16MB per upload
+- **Queue capacity**: Unlimited (database-based)
+- **Settings persistence**: Real-time configuration updates
 
 ## 🤝 Contributing
 
@@ -268,6 +337,42 @@ For support and questions:
 - Review AWS Bedrock documentation
 - Verify AWS credentials and permissions
 
+## 🔄 Recent Updates
+
+### Version 1.1.0 (Latest)
+- ✅ **Multi-Model Support**: Claude Opus 4.1, Sonnet 4, and 3.7 Sonnet
+- ✅ **Configurable Compliance**: Editable wage laws and validation rules
+- ✅ **Enhanced Settings UI**: Real-time configuration with database persistence
+- ✅ **System Information**: Platform detection and browser compatibility
+- ✅ **Improved Validation**: Dynamic compliance checking with custom parameters
+
+### Version 1.0.0
+- ✅ **Core Pipeline**: Excel → Markdown → LLM → Validation
+- ✅ **Job Queue System**: Asynchronous processing with progress tracking
+- ✅ **AWS Integration**: Bedrock and Claude Sonnet integration
+- ✅ **Review Queue**: Human-in-the-loop validation workflow
+- ✅ **Dashboard UI**: Real-time monitoring and management
+
+## 🛠️ Technology Stack
+
+### Backend
+- **Python 3.9+** with Flask web framework
+- **AWS Bedrock** for AI model access
+- **SQLite** for job queue and settings persistence
+- **Pandas** for Excel/CSV processing
+- **Boto3** for AWS service integration
+
+### Frontend
+- **React 18** with modern hooks and context
+- **Cloudscape Design System** for AWS Console-style UI
+- **Real-time Updates** via polling and state management
+- **Responsive Design** for desktop and mobile
+
+### AI Models
+- **Claude Opus 4.1**: `anthropic.claude-opus-4-1-20250805-v1:0`
+- **Claude Sonnet 4**: `anthropic.claude-sonnet-4-20250514-v1:0`
+- **Claude 3.7 Sonnet**: `anthropic.claude-3-7-sonnet-20250219-v1:0`
+
 ---
 
-**Built with AWS Bedrock, Claude Sonnet 4, and Cloudscape Design System**
+**Built with AWS Bedrock, Multiple Claude Models, and Cloudscape Design System**

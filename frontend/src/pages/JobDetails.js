@@ -431,6 +431,17 @@ const JobDetails = ({ addNotification }) => {
                 {
                   label: 'Extraction Method',
                   value: job.result.extracted_data?.extraction_method || 'N/A'
+                },
+                {
+                  label: 'Model Used',
+                  value: (() => {
+                    const modelId = job.result.extracted_data?.model_info?.model_id || 
+                                   job.result.validation?.model_info?.model_id ||
+                                   job.metadata?.model_info?.model_id || 'N/A';
+                    if (modelId === 'N/A') return 'N/A';
+                    // Extract just the model name (e.g., "claude-sonnet-4" from full ID)
+                    return modelId.split('.').pop()?.split('-').slice(0, 3).join('-') || modelId;
+                  })()
                 }
               ]}
             />
@@ -499,6 +510,15 @@ const JobDetails = ({ addNotification }) => {
                   label: 'Requires Review',
                   value: validation.requires_human_review ? 
                     (validation.review_completed ? 'Completed' : 'Yes') : 'No'
+                },
+                {
+                  label: 'Validation Model',
+                  value: (() => {
+                    const modelId = validation.model_info?.validation_model || 
+                                   validation.model_info?.model_id || 'N/A';
+                    if (modelId === 'N/A') return 'N/A';
+                    return modelId.split('.').pop()?.split('-').slice(0, 3).join('-') || modelId;
+                  })()
                 }
               ]}
             />
@@ -523,7 +543,7 @@ const JobDetails = ({ addNotification }) => {
           <Container
             header={<Header variant="h3">Recommended Actions</Header>}
           >
-            <ul>
+            <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
               {validation.next_actions.map((action, index) => (
                 <li key={index}>{action}</li>
               ))}
@@ -541,6 +561,8 @@ const JobDetails = ({ addNotification }) => {
       </SpaceBetween>
     );
   };
+
+
 
   const renderMarkdownTab = () => {
     if (!job?.result?.markdown_preview) return (
@@ -929,6 +951,59 @@ const JobDetails = ({ addNotification }) => {
         </ColumnLayout>
       </Container>
 
+      {/* Model Information - Only show during processing */}
+      {(job?.status === 'processing' || job?.status === 'pending') && (
+        <Container
+          header={<Header variant="h2">Model Information</Header>}
+        >
+          <ColumnLayout columns={3}>
+            <KeyValuePairs
+              columns={1}
+              items={[
+                {
+                  label: 'Configured Model',
+                  value: (() => {
+                    const modelId = job.metadata?.model_info?.model_id || 'N/A';
+                    if (modelId === 'N/A') return 'N/A';
+                    return modelId.split('.').pop()?.split('-').slice(0, 3).join('-') || modelId;
+                  })()
+                },
+                {
+                  label: 'AWS Region',
+                  value: job.metadata?.model_info?.aws_region || 'N/A'
+                }
+              ]}
+            />
+            <KeyValuePairs
+              columns={1}
+              items={[
+                {
+                  label: 'Job Type',
+                  value: job.type || 'N/A'
+                },
+                {
+                  label: 'Priority',
+                  value: job.priority || 'N/A'
+                }
+              ]}
+            />
+            <KeyValuePairs
+              columns={1}
+              items={[
+                {
+                  label: 'Current Stage',
+                  value: job?.status === 'processing' ? 'Processing' : 'Pending'
+                },
+                {
+                  label: 'Progress',
+                  value: job?.status === 'processing' ? `${job.progress || 0}%` : '0%'
+                }
+              ]}
+            />
+          </ColumnLayout>
+        </Container>
+      )}
+
       {/* Results Tabs */}
       {job.result && (
         <Container>
@@ -948,6 +1023,7 @@ const JobDetails = ({ addNotification }) => {
                 id: 'markdown-data',
                 label: 'Markdown Data'
               },
+
               {
                 id: 'raw-data',
                 label: 'Raw Data'
@@ -961,6 +1037,8 @@ const JobDetails = ({ addNotification }) => {
           {activeTab === 'timecard-data' && renderTimecardData()}
 
           {activeTab === 'markdown-data' && renderMarkdownTab()}
+
+
 
           {activeTab === 'raw-data' && (
             <Container

@@ -98,7 +98,7 @@ const Dashboard = ({ addNotification }) => {
           </div>
           <div>
             <Box variant="awsui-key-label">Processing</Box>
-            <Box variant="awsui-value-large" color={stats.processing > 0 ? "text-status-info" : undefined}>
+            <Box variant="awsui-value-large" color={(stats.processing || 0) > 0 ? "text-status-info" : undefined}>
               {stats.processing || 0}
             </Box>
           </div>
@@ -110,21 +110,53 @@ const Dashboard = ({ addNotification }) => {
           </div>
           <div>
             <Box variant="awsui-key-label">Failed</Box>
-            <Box variant="awsui-value-large" color={stats.failed > 0 ? "text-status-error" : undefined}>
+            <Box variant="awsui-value-large" color={(stats.failed || 0) > 0 ? "text-status-error" : undefined}>
               {stats.failed || 0}
             </Box>
           </div>
           <div>
             <Box variant="awsui-key-label">Review Queue</Box>
-            <Box variant="awsui-value-large" color={reviewQueue.length > 0 ? "text-status-warning" : undefined}>
-              {reviewQueue.length || 0}
+            <Box variant="awsui-value-large" color={(stats.review_queue || 0) > 0 ? "text-status-warning" : undefined}>
+              {stats.review_queue || 0}
             </Box>
           </div>
           <div>
             <Box variant="awsui-key-label">Avg Processing Time</Box>
             <Box variant="awsui-value-large">
-              {stats.avg_processing_time ? jobService.formatDuration(stats.avg_processing_time) : '0s'}
+              {stats.avg_processing_time ? `${stats.avg_processing_time}s` : '0s'}
             </Box>
+          </div>
+        </ColumnLayout>
+      </Container>
+
+      {/* Additional Metrics */}
+      <Container
+        header={
+          <Header variant="h2">
+            Performance Metrics
+          </Header>
+        }
+      >
+        <ColumnLayout columns={4} variant="text-grid">
+          <div>
+            <Box variant="awsui-key-label">Success Rate</Box>
+            <Box variant="awsui-value-large" color="text-status-success">
+              {stats.success_rate ? `${stats.success_rate.toFixed(1)}%` : '0%'}
+            </Box>
+          </div>
+          <div>
+            <Box variant="awsui-key-label">Jobs Today</Box>
+            <Box variant="awsui-value-large">{stats.jobs_today || 0}</Box>
+          </div>
+          <div>
+            <Box variant="awsui-key-label">Pending</Box>
+            <Box variant="awsui-value-large" color={(stats.pending || 0) > 0 ? "text-status-info" : undefined}>
+              {stats.pending || 0}
+            </Box>
+          </div>
+          <div>
+            <Box variant="awsui-key-label">Cancelled</Box>
+            <Box variant="awsui-value-large">{stats.cancelled || 0}</Box>
           </div>
         </ColumnLayout>
       </Container>

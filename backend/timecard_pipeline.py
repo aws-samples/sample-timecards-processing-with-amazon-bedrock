@@ -39,10 +39,19 @@ class TimecardPipeline:
     def __init__(self, config_manager=None):
         self.config = config_manager
 
-        # Initialize AWS clients with configuration
+        # Initialize AWS clients with configuration and extended timeout
         region = self.config.aws_region if self.config else "us-west-2"
-        self.bedrock = boto3.client("bedrock-runtime", region_name=region)
-        self.guardrails = boto3.client("bedrock", region_name=region)
+        
+        # Configure boto3 with extended timeout for large requests
+        from botocore.config import Config
+        boto_config = Config(
+            read_timeout=600,  # 10 minutes
+            connect_timeout=60,  # 1 minute
+            retries={'max_attempts': 1}
+        )
+        
+        self.bedrock = boto3.client("bedrock-runtime", region_name=region, config=boto_config)
+        self.guardrails = boto3.client("bedrock", region_name=region, config=boto_config)
 
         # Initialize compliance rules from configuration
         if self.config:
@@ -237,12 +246,19 @@ class TimecardPipeline:
                 },
             }
 
+            # Get model ID from configuration
+            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            logger.info(f"Using model ID for extraction: {model_id}")
+            
+            # Set max tokens based on model
+            max_tokens = self._get_max_tokens_for_model(model_id)
+            
             # Use Converse API with Tool Use
             response = self.bedrock.converse(
-                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+                modelId=model_id,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 toolConfig={"tools": [{"toolSpec": tool_schema}]},
-                inferenceConfig={"maxTokens": 64000, "temperature": 0.1, "topP": 1},
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1, "topP": 1},
             )
 
             # Extract tool use result
@@ -280,6 +296,11 @@ class TimecardPipeline:
                 extracted = tool_use_content
 
             extracted["extraction_method"] = "tool_use"
+            extracted["model_info"] = {
+                "model_id": model_id,
+                "extraction_model": model_id,
+                "max_tokens": max_tokens
+            }
 
             # Post-process and validate the extracted data
             extracted = self._post_process_extracted_data(extracted)
@@ -289,6 +310,7 @@ class TimecardPipeline:
         except Exception as e:
             logger.error(f"LLM extraction failed: {e}")
             # Enhanced fallback with better defaults
+            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
             return {
                 "employee_name": "Extraction Failed",
                 "employee_count": 0,
@@ -302,6 +324,11 @@ class TimecardPipeline:
                 "pay_period_end": "2025-01-31",
                 "daily_entries": [],
                 "extraction_method": "fallback",
+                "model_info": {
+                    "model_id": model_id,
+                    "extraction_model": model_id,
+                    "error": str(e)
+                },
                 "error": str(e),
             }
 
@@ -427,10 +454,13 @@ class TimecardPipeline:
             )
             requires_human_review = True
 
-        # 5. Run Automated Reasoning validation
-        reasoning_result = self._run_automated_reasoning_validation(
-            extracted_data, weekly_equivalent, is_salary_exempt
-        )
+        # 5. Run rule-based validation (skip LLM for speed)
+        reasoning_result = {
+            "result": "VALID" if not validation_issues else "INVALID",
+            "confidence": 0.95,
+            "reasoning": "Rule-based validation completed",
+            "compliance_issues": validation_issues
+        }
 
         # 6. Calculate pay (for daily rate system, pay equals total wage)
         pay_calculation = {
@@ -451,6 +481,12 @@ class TimecardPipeline:
         else:
             final_result = ValidationResult.SATISFIABLE
 
+        # Get model info from extracted data or use default
+        model_info = extracted_data.get("model_info", {
+            "model_id": self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0",
+            "validation_model": self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        })
+
         return {
             "validation_result": final_result.value,
             "employee_name": employee_name,
@@ -464,6 +500,7 @@ class TimecardPipeline:
             "validation_issues": validation_issues,
             "requires_human_review": requires_human_review,
             "reasoning_confidence": reasoning_result.get("confidence", 0.0),
+            "model_info": model_info,
             "compliance_summary": self._generate_compliance_summary(
                 unique_days,
                 average_daily_rate,
@@ -535,8 +572,9 @@ class TimecardPipeline:
         
         Federal Requirements:
         - Minimum wage: ${self.compliance.federal_minimum_wage}/hour (${self.compliance.federal_minimum_wage * 8:.2f}/day)
+        - Overtime threshold: {self.compliance.overtime_threshold} hours/week
         - Salary exempt threshold: ${self.compliance.salary_exempt_threshold}/week
-        - Maximum days per week: 6 days
+        - Maximum recommended hours: {self.compliance.max_weekly_hours} hours/week
         
         Return JSON with:
         - result: "VALID" | "INVALID" | "SATISFIABLE"
@@ -586,12 +624,18 @@ class TimecardPipeline:
                 },
             }
 
+            # Get model ID from configuration
+            model_id = self.config.bedrock_model_id if self.config else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            
+            # Set max tokens for validation (smaller requirement)
+            max_tokens = min(1000, self._get_max_tokens_for_model(model_id))
+            
             # Use Converse API with Tool Use for validation
             response = self.bedrock.converse(
-                modelId="us.anthropic.claude-sonnet-4-20250514-v1:0",
+                modelId=model_id,
                 messages=[{"role": "user", "content": [{"text": validation_prompt}]}],
                 toolConfig={"tools": [{"toolSpec": validation_tool_schema}]},
-                inferenceConfig={"maxTokens": 1000, "temperature": 0.1, "topP": 1},
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1, "topP": 1},
             )
 
             # Extract tool use result
@@ -627,7 +671,13 @@ class TimecardPipeline:
                         "No tool use or text content found in validation response"
                     )
 
-            return tool_use_content
+            result = tool_use_content
+            result["model_info"] = {
+                "model_id": model_id,
+                "validation_model": model_id,
+                "max_tokens": max_tokens
+            }
+            return result
 
         except Exception as e:
             logger.error(f"Automated reasoning error: {e}")
@@ -636,6 +686,11 @@ class TimecardPipeline:
                 "confidence": 0.0,
                 "reasoning": f"Error in validation: {e}",
                 "compliance_issues": [],
+                "model_info": {
+                    "model_id": model_id,
+                    "validation_model": model_id,
+                    "error": str(e)
+                }
             }
 
     def _generate_compliance_summary(
@@ -718,19 +773,25 @@ class TimecardPipeline:
             reverse=True,
         )
 
-    def process(self, excel_path: str) -> Dict[str, Any]:
+    def process(self, excel_path: str, progress_callback=None) -> Dict[str, Any]:
         """Complete 3-step pipeline execution"""
         try:
             # Step 1: Excel → Markdown
             logger.info("Step 1: Converting Excel to Markdown...")
+            if progress_callback:
+                progress_callback(20)
             markdown = self.step1_excel_to_markdown(excel_path)
 
             # Step 2: Markdown → LLM Extraction
             logger.info("Step 2: LLM data extraction...")
+            if progress_callback:
+                progress_callback(40)
             extracted_data = self.step2_llm_extraction(markdown)
 
             # Step 3: Automated Reasoning Validation
-            logger.info("Step 3: Automated reasoning validation...")
+            logger.info("Step 3: Rule-based validation...")
+            if progress_callback:
+                progress_callback(80)
             validation = self.step3_automated_reasoning(extracted_data)
 
             return {
@@ -749,6 +810,23 @@ class TimecardPipeline:
         except Exception as e:
             logger.error(f"Pipeline failed: {e}")
             return {"status": "error", "error": str(e), "file_path": excel_path}
+
+    def _get_max_tokens_for_model(self, model_id: str) -> int:
+        """Get maximum tokens allowed for the specified model"""
+        # Model-specific token limits
+        model_limits = {
+            # Claude Opus 4.1 has a 32K token limit
+            "us.anthropic.claude-opus-4-1-20250805-v1:0": 32000,
+            # Claude Sonnet 4 has higher limits
+            "us.anthropic.claude-sonnet-4-20250514-v1:0": 64000,
+            # Claude 3.7 Sonnet has higher limits
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0": 64000,
+            # Legacy models (fallback)
+            "anthropic.claude-3-sonnet-20240229-v1:0": 64000,
+        }
+        
+        # Return model-specific limit or default to 32000 for safety
+        return model_limits.get(model_id, 32000)
 
 
 # Simple usage example

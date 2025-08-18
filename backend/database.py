@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, asdict
 from enum import Enum
 
@@ -269,9 +269,10 @@ class DatabaseManager:
             conn.commit()
             return cursor.rowcount > 0
 
-    def get_queue_stats(self) -> Dict[str, int]:
-        """Get queue statistics"""
+    def get_queue_stats(self) -> Dict[str, Any]:
+        """Get queue statistics with enhanced metrics"""
         with sqlite3.connect(self.db_path) as conn:
+            # Basic status counts
             cursor = conn.execute(
                 """
                 SELECT status, COUNT(*) as count 
@@ -285,7 +286,7 @@ class DatabaseManager:
             for status, count in rows:
                 stats[status] = count
 
-            # Count jobs requiring human review (not yet completed)
+            # Count jobs requiring human review
             cursor = conn.execute(
                 """
                 SELECT COUNT(*) as review_count
@@ -299,6 +300,38 @@ class DatabaseManager:
             )
             review_count = cursor.fetchone()[0]
             stats['review_queue'] = review_count
+
+            # Calculate total jobs
+            stats['total_jobs'] = sum(stats[status.value] for status in JobStatus)
+
+            # Calculate average processing time for completed jobs
+            cursor = conn.execute(
+                """
+                SELECT AVG(
+                    (julianday(completed_at) - julianday(started_at)) * 24 * 3600
+                ) as avg_seconds
+                FROM jobs 
+                WHERE status = 'completed' 
+                AND started_at IS NOT NULL 
+                AND completed_at IS NOT NULL
+            """
+            )
+            avg_result = cursor.fetchone()[0]
+            stats['avg_processing_time'] = int(avg_result) if avg_result else 0
+
+            # Success rate
+            total_finished = stats['completed'] + stats['failed']
+            stats['success_rate'] = (stats['completed'] / total_finished * 100) if total_finished > 0 else 0
+
+            # Jobs processed today
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) as today_count
+                FROM jobs 
+                WHERE date(created_at) = date('now')
+            """
+            )
+            stats['jobs_today'] = cursor.fetchone()[0]
 
             return stats
 

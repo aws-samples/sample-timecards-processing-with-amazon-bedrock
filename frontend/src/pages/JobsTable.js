@@ -25,7 +25,7 @@ const JobsTable = ({ addNotification }) => {
   const [selectedItems, setSelectedItems] = useState([]);
   const [preferences, setPreferences] = useState({
     pageSize: 20,
-    visibleContent: ['id', 'file_name', 'status', 'created_at', 'progress']
+    visibleContent: ['id', 'file_name', 'status', 'created_at', 'progress', 'model']
   });
   const [filtering, setFiltering] = useState({
     tokens: [],
@@ -236,6 +236,21 @@ const JobsTable = ({ addNotification }) => {
       header: 'Updated',
       cell: item => formatTime(item.updated_at),
       sortingField: 'updated_at'
+    },
+    {
+      id: 'model',
+      header: 'Model',
+      cell: item => {
+        const modelId = item.metadata?.model_info?.model_id || 
+                       item.result?.extracted_data?.model_info?.model_id ||
+                       item.result?.validation?.model_info?.model_id;
+        if (modelId) {
+          // Extract just the model name from the full ID
+          const modelName = modelId.split('.').pop()?.split('-')[0] || modelId;
+          return <Badge>{modelName}</Badge>;
+        }
+        return <Badge color="grey">N/A</Badge>;
+      }
     },
 
   ];
