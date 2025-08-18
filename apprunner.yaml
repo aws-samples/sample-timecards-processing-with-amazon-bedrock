@@ -1,0 +1,25 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "Build started on `date`"
+      - echo "Building Cast & Crew Timecard Processor..."
+      - echo "Using Claude Sonnet 4 with thinking capabilities"
+run:
+  runtime-version: latest
+  command: python app.py
+  network:
+    port: 8080
+    env: PORT
+  env:
+    - name: PORT
+      value: "8080"
+    - name: FLASK_ENV
+      value: "production"
+    - name: AWS_DEFAULT_REGION
+      value: "us-west-2"
+    - name: PYTHONPATH
+      value: "/app"
+    - name: PYTHONUNBUFFERED
+      value: "1"
