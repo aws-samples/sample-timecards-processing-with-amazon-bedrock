@@ -146,13 +146,20 @@ def allowed_file(filename):
 
 
 @app.route("/", methods=["GET"])
+@app.route("/health", methods=["GET"])
 def health_check():
     """Health check endpoint"""
     try:
+        # Test database connection
         stats = job_queue.get_queue_stats()
+        
+        # Test if we're using PostgreSQL or SQLite
+        db_type = "postgresql" if db_manager.use_postgres else "sqlite"
+        
         return jsonify({
             "status": "healthy", 
             "service": "timecard-processor",
+            "database": db_type,
             "queue_stats": stats
         })
     except Exception as e:

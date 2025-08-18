@@ -1,378 +1,377 @@
 # Timecard Processing System
 
-AWS Console-style timecard processing system with AI-powered validation and job queue management.
+A scalable, AI-powered timecard processing system built on AWS with automated compliance validation and human-in-the-loop review capabilities.
 
-## 🏗️ Architecture
+## Architecture Overview
 
-### Backend (Python Flask)
-- **Job Queue System**: Stateless job management with file persistence
-- **3-Step AI Pipeline**: Excel → Markdown → LLM Extraction → Compliance Validation
-- **AWS Bedrock Integration**: Claude Sonnet 4 for intelligent data extraction
-- **Federal Compliance**: Automated wage law validation with human review triggers
+This solution demonstrates a modern, cloud-native approach to timecard processing using AWS services including ECS Fargate, RDS PostgreSQL, AWS Bedrock, and CloudFront. The system processes Excel/CSV timecard files through an AI pipeline that extracts data, validates compliance with federal wage laws, and routes complex cases for human review.
 
-### Frontend (React + Cloudscape Design System)
-- **AWS Console Style UI**: Professional dashboard with real-time monitoring
-- **Job Management**: Upload, track, and manage processing jobs
-- **Review Queue**: Human-in-the-loop validation for complex cases
-- **Real-time Updates**: Live job status and progress tracking
+### Key Components
 
-## 🚀 Features
+- **Frontend**: React application with AWS Cloudscape Design System
+- **Backend**: Python Flask API with asynchronous job processing
+- **Database**: PostgreSQL (AWS RDS) for production, SQLite for local development
+- **AI Processing**: AWS Bedrock with Claude models for intelligent data extraction
+- **Infrastructure**: Fully automated deployment using Terraform
+- **Monitoring**: CloudWatch Logs with structured logging and health checks
 
-### Job Processing
-- ✅ **Asynchronous Processing**: Upload files and track jobs in real-time
-- ✅ **Priority Queue**: High/Normal/Low/Urgent priority levels
-- ✅ **Progress Tracking**: Real-time progress updates with detailed status
-- ✅ **Error Handling**: Comprehensive error reporting and recovery
-- ✅ **File Persistence**: Stateless design survives app restarts
+## Features
 
-### AI-Powered Extraction
-- ✅ **Multiple Claude Models**: Support for Claude Opus 4.1, Sonnet 4, and 3.7 Sonnet
-- ✅ **Configurable Model Selection**: Choose AI model based on complexity and cost requirements
-- ✅ **Token Optimization**: Compact array format reduces usage by 60%
-- ✅ **Daily Rate System**: Entertainment industry-compliant wage calculations
-- ✅ **Multi-format Support**: Excel (.xlsx, .xls, .xlsm) and CSV files
+### Core Functionality
 
-### Compliance & Validation
-- ✅ **Configurable Compliance Rules**: Editable federal wage laws and thresholds
-- ✅ **Dynamic Validation**: Real-time compliance checking with custom parameters
-- ✅ **Human Review Queue**: Complex cases routed for manual review
-- ✅ **Audit Trail**: Complete processing history and validation results
-- ✅ **Risk Assessment**: Priority-based review assignment
+- **Asynchronous Processing**: Upload files and track jobs in real-time with priority queuing
+- **AI-Powered Extraction**: Multiple Claude model support (Opus 4.1, Sonnet 4, 3.7 Sonnet)
+- **Compliance Validation**: Configurable federal wage law validation with custom parameters
+- **Human Review Queue**: Complex cases routed for manual validation with audit trail
+- **Multi-format Support**: Excel (.xlsx, .xls, .xlsm) and CSV file processing
 
-### User Interface
-- ✅ **Dashboard**: Real-time metrics, charts, and system health
-- ✅ **Job Table**: Advanced filtering, sorting, and bulk operations
-- ✅ **Upload Interface**: Drag-and-drop with progress tracking
-- ✅ **Review Queue**: Streamlined validation workflow
-- ✅ **Advanced Settings**: Configurable compliance rules, model selection, and system parameters
-- ✅ **System Information**: Real-time platform detection and browser information
+### Enterprise Features
 
-## 📊 Dashboard Features
+- **High Availability**: Multi-AZ deployment with auto-scaling
+- **Security**: VPC isolation, IAM roles, encrypted storage
+- **Monitoring**: Real-time metrics, health checks, and operational insights
+- **Scalability**: Horizontal scaling with ECS Fargate and RDS
+- **Cost Optimization**: Automated cleanup policies and resource optimization
 
-### Key Metrics
-- Total jobs processed
-- Active processing jobs
-- Completion rates
-- Average processing time
-- Error rates and trends
+## Prerequisites
 
-### Visualizations
-- Job activity charts (24-hour view)
-- Status distribution pie charts
-- Processing time trends
-- Queue depth monitoring
+### Local Development
 
-### System Health
-- Queue status indicators
-- Processing capacity monitoring
-- Error rate alerts
-- Performance metrics
-
-## 🔄 Job Lifecycle
-
-```
-1. Upload → 2. Queue → 3. Processing → 4. Validation → 5. Complete/Review
-```
-
-### Job States
-- **Pending**: Waiting in queue for processing
-- **Processing**: Active AI pipeline execution
-- **Completed**: Successfully processed and validated
-- **Failed**: Processing error occurred
-- **Cancelled**: User-cancelled before processing
-
-### Processing Steps
-1. **Excel to Markdown**: Convert spreadsheet to AI-readable format
-2. **LLM Extraction**: Claude Sonnet extracts timecard data
-3. **Compliance Validation**: Federal wage law compliance checking
-4. **Human Review**: Complex cases routed for manual validation
-
-## 🛠️ Installation & Setup
-
-### Prerequisites
 - Python 3.9+
 - Node.js 16+
-- AWS Account with Bedrock access
-- AWS CLI configured
+- Docker
+- AWS CLI configured with appropriate permissions
 
-### Backend Setup
+### AWS Deployment
+
+- AWS Account with Bedrock access enabled
+- Terraform 1.0+
+- Domain registered in Route 53 (optional)
+- ACM certificate (automatically provisioned if domain provided)
+
+## Quick Start
+
+### Local Development
+
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd timecard-processing-system
+
+# Backend setup
 cd backend
-pip install flask flask-cors boto3 pandas openpyxl
+pip install -r requirements.txt
 python app.py
-```
 
-### Frontend Setup
-```bash
+# Frontend setup (new terminal)
 cd frontend
 npm install
 npm start
 ```
 
-### AWS Configuration
-```bash
-# Configure AWS credentials
-aws configure
+Access the application at `http://localhost:3000`
 
-# Enable Bedrock models (if needed)
-aws bedrock put-model-invocation-logging-configuration \
-  --logging-config cloudWatchConfig='{logGroupName="/aws/bedrock/modelinvocations",roleArn="arn:aws:iam::ACCOUNT:role/service-role/AmazonBedrockExecutionRoleForKnowledgeBase_XXXXX"}'
+### AWS Deployment
+
+```bash
+# Navigate to terraform directory
+cd terraform
+
+# Configure deployment variables
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your configuration
+
+# Deploy infrastructure
+terraform init
+terraform plan
+terraform apply
 ```
 
-## 🔧 Configuration
+The deployment process automatically:
+1. Creates VPC, subnets, and security groups
+2. Provisions RDS PostgreSQL database
+3. Sets up ECS Fargate cluster with auto-scaling
+4. Builds and pushes Docker images to ECR
+5. Deploys React application to S3 and CloudFront
+6. Configures Route 53 DNS and ACM certificates
+
+## Configuration
 
 ### Environment Variables
-```bash
-# Backend
-export AWS_REGION=us-west-2
-export CLAUDE_MODEL=anthropic.claude-sonnet-4-20250514-v1:0
-export FLASK_ENV=development
-export PORT=8000
 
-# Frontend
-export REACT_APP_API_URL=http://localhost:8000
+#### Production (AWS)
+- `DATABASE_URL`: PostgreSQL connection string (automatically configured)
+- `AWS_DEFAULT_REGION`: AWS region for services
+- `S3_BUCKET`: S3 bucket for file uploads
+- `FLASK_ENV`: Set to "production"
+
+#### Development (Local)
+- No `DATABASE_URL`: Automatically uses SQLite
+- `AWS_REGION`: For Bedrock API calls
+- `FLASK_ENV`: Set to "development"
+
+### Terraform Variables
+
+Key configuration options in `terraform.tfvars`:
+
+```hcl
+# Project Configuration
+project_name = "timecard-processor"
+environment  = "prod"
+aws_region   = "us-west-2"
+
+# Custom Domain (optional)
+domain_name = "timecard.yourdomain.com"
+
+# Database Configuration
+db_instance_class = "db.t4g.micro"
+db_multi_az       = false
+
+# ECS Configuration
+ecs_task_cpu      = 512
+ecs_task_memory   = 1024
+ecs_desired_count = 2
+ecs_min_capacity  = 1
+ecs_max_capacity  = 10
+
+# Auto Scaling
+enable_auto_scaling = true
 ```
 
-### Configurable Settings (via UI)
-
-#### Job Processing
-- **Max Concurrent Jobs**: 1-10 jobs (default: 3)
-- **Auto Cleanup**: 1-30 days (default: 7)
-- **Notifications**: Enable/disable job status notifications
-
-#### AWS Configuration
-- **Region Selection**: US East 1, US West 2, EU West 1, AP Southeast 1
-- **Claude Model**: Choose from Opus 4.1, Sonnet 4, or 3.7 Sonnet
-- **Credentials**: Environment variables or IAM roles
-
-#### Compliance Rules (Editable)
-- **Federal Minimum Wage**: $7.25/hour (configurable)
-- **Overtime Threshold**: 40 hours/week (configurable)
-- **Salary Exempt Threshold**: $684/week (configurable)
-- **Max Recommended Hours**: 60 hours/week (configurable)
-
-### File Storage
-- **Upload Directory**: `uploads/` (auto-cleanup)
-- **Database**: SQLite with settings persistence
-- **Upload Limit**: 16MB per file
-
-## 📋 API Endpoints
+## API Reference
 
 ### Job Management
-- `POST /api/upload` - Upload file and create job
-- `GET /api/jobs` - List jobs with filtering
-- `GET /api/jobs/{id}` - Get job details
+
+- `POST /api/upload` - Upload file and create processing job
+- `GET /api/jobs` - List jobs with optional filtering
+- `GET /api/jobs/{id}` - Get job details and status
 - `POST /api/jobs/{id}/cancel` - Cancel pending job
+- `DELETE /api/jobs/{id}` - Delete completed job
 
 ### Queue Operations
-- `GET /api/queue/stats` - Queue statistics
-- `POST /api/queue/cleanup` - Clean old jobs
-- `GET /api/review-queue` - Human review items
+
+- `GET /api/queue/stats` - Get queue statistics and metrics
+- `POST /api/queue/cleanup` - Clean up old completed jobs
+- `GET /api/review-queue` - Get items requiring human review
 
 ### Settings Management
+
 - `GET /api/settings` - Get all system settings
 - `POST /api/settings` - Update multiple settings
-- `GET /api/settings/{key}` - Get specific setting
+- `GET /api/settings/{key}` - Get specific setting value
 - `PUT /api/settings/{key}` - Update specific setting
 
-### Sample Files
-- `GET /api/samples` - List sample files
-- `GET /api/process-sample/{filename}` - Process sample file
+### Health and Monitoring
 
-## ⚙️ Advanced Configuration
+- `GET /health` - Health check endpoint for load balancers
+- `GET /` - Service status with queue statistics
 
-### Claude Model Selection
-Choose the optimal AI model based on your needs:
+## Database Schema
 
-| Model | Use Case | Speed | Accuracy | Cost |
-|-------|----------|-------|----------|------|
-| **Claude Opus 4.1** | Complex timecards, high accuracy required | Slow | Highest | High |
-| **Claude Sonnet 4** | General purpose, balanced performance | Medium | High | Medium |
-| **Claude 3.7 Sonnet** | Simple timecards, cost optimization | Fast | Good | Low |
+### Jobs Table
 
-### Compliance Rule Customization
-Adapt the system to your organization's requirements:
+| Column | Type | Description |
+|--------|------|-------------|
+| id | VARCHAR(36) | Unique job identifier |
+| type | VARCHAR(100) | Job type (e.g., "timecard_processing") |
+| status | VARCHAR(20) | Current job status |
+| priority | INTEGER | Job priority (1-4) |
+| file_name | VARCHAR(255) | Original filename |
+| file_size | BIGINT | File size in bytes |
+| created_at | TIMESTAMP | Job creation time |
+| updated_at | TIMESTAMP | Last update time |
+| started_at | TIMESTAMP | Processing start time |
+| completed_at | TIMESTAMP | Processing completion time |
+| progress | INTEGER | Progress percentage (0-100) |
+| result | JSONB | Processing results |
+| error | TEXT | Error message if failed |
+| metadata | JSONB | Additional job metadata |
 
-- **Minimum Wage**: Set custom rates above federal minimum
-- **Overtime Rules**: Configure weekly hour thresholds
-- **Salary Thresholds**: Adjust exempt employee limits
-- **Review Triggers**: Set custom flagging criteria
+### Settings Table
 
-### System Monitoring
-Built-in monitoring and health checks:
+| Column | Type | Description |
+|--------|------|-------------|
+| key | VARCHAR(100) | Setting key |
+| value | JSONB | Setting value |
+| updated_at | TIMESTAMP | Last update time |
 
-- **Platform Detection**: Automatic Mac ARM/Intel detection
-- **Browser Compatibility**: Real-time browser information
-- **AWS Status**: Credential and service validation
-- **Model Availability**: Bedrock model access verification
+## Monitoring and Observability
 
-## 🎯 Usage Examples
+### CloudWatch Metrics
 
-### Upload File via UI
-1. Navigate to Upload page
-2. Drag and drop Excel file
-3. Select priority level
-4. Click "Upload and Process"
-5. Track progress in Jobs table
+- ECS service metrics (CPU, memory utilization)
+- Application Load Balancer metrics (request count, response time)
+- RDS metrics (connections, CPU, storage)
+- Custom application metrics via CloudWatch Logs
 
-### Process Sample File
-1. Go to Upload page
-2. Click "Process Sample" on any sample file
-3. Monitor job in Dashboard
-4. View results in Job Details
+### Health Checks
 
-### Review Queue Workflow
-1. Jobs requiring review appear in Review Queue
-2. Click "Review" to examine details
-3. View validation issues and timecard data
-4. Approve or reject with comments
+- ECS container health checks with configurable parameters
+- ALB target group health checks on `/health` endpoint
+- Database connection validation in health check response
 
-### Settings Configuration
-1. Navigate to Settings page
-2. Configure compliance rules (wages, thresholds)
-3. Select preferred Claude model
-4. Set AWS region and processing limits
-5. Enable/disable auto-cleanup and notifications
-6. Save settings (persisted in database)
+### Logging
 
-## 🔍 Monitoring & Troubleshooting
+Structured logging with the following log levels:
+- `INFO`: Normal operations and job status changes
+- `WARNING`: Recoverable errors and retry attempts
+- `ERROR`: Unrecoverable errors requiring attention
+- `DEBUG`: Detailed debugging information (development only)
 
-### Health Check
+## Security Considerations
+
+### Network Security
+
+- VPC with private subnets for application and database tiers
+- Security groups with least-privilege access rules
+- NAT Gateways for outbound internet access from private subnets
+- Application Load Balancer in public subnets only
+
+### Data Protection
+
+- Encryption at rest for RDS and S3
+- Encryption in transit with HTTPS/TLS
+- IAM roles with minimal required permissions
+- S3 bucket policies preventing public access
+
+### Access Control
+
+- ECS tasks run with dedicated IAM roles
+- Bedrock access limited to specific model ARNs
+- Database credentials managed via environment variables
+- CloudFront Origin Access Control for S3 protection
+
+## Cost Optimization
+
+### Resource Optimization
+
+- ECS Fargate with right-sized CPU/memory allocation
+- RDS instance class selection based on workload
+- S3 lifecycle policies for automatic cleanup
+- CloudFront caching to reduce origin requests
+
+### Monitoring and Alerts
+
+- CloudWatch billing alerts for cost monitoring
+- Resource utilization metrics for optimization opportunities
+- Automated cleanup of old jobs and uploaded files
+
+## Troubleshooting
+
+### Common Issues
+
+#### ECS Task Startup Failures
+
 ```bash
-curl http://localhost:8000/
+# Check ECS service events
+aws ecs describe-services --cluster timecard-processor-cluster --services timecard-processor-service
+
+# View container logs
+aws logs tail /ecs/timecard-processor --follow
 ```
 
-### Job Status Monitoring
-- Dashboard provides real-time metrics
-- Job table shows detailed status
-- Progress bars for active jobs
-- Error messages for failed jobs
+#### Database Connection Issues
 
-### Log Files
-- Backend: Console output with structured logging
-- Job persistence: `job_data/*.json` files
-- Upload files: `uploads/` directory (auto-cleanup)
-
-## 🏢 Enterprise Features
-
-### Compliance (Configurable)
-- **Federal minimum wage validation**: Configurable rate (default: $7.25/hour)
-- **Overtime threshold monitoring**: Configurable hours (default: 40 hours/week)
-- **Salary exempt validation**: Configurable threshold (default: $684/week)
-- **Excessive hours flagging**: Configurable limit (default: 60 hours/week)
-- **Real-time rule updates**: Changes apply immediately to new jobs
-
-### Audit Trail
-- Complete job processing history
-- Validation decision logging
-- Human review tracking
-- Compliance report generation
-
-### Scalability
-- Stateless job processing
-- File-based persistence
-- Horizontal scaling ready
-- AWS cloud deployment
-
-## 🚀 Deployment
-
-### Local Development
 ```bash
-# Terminal 1 - Backend
-cd backend && python app.py
+# Test database connectivity from ECS task
+aws ecs execute-command --cluster timecard-processor-cluster --task <task-id> --interactive --command "/bin/bash"
 
-# Terminal 2 - Frontend
-cd frontend && npm start
+# Inside container
+curl http://localhost:8080/health
 ```
 
-### AWS App Runner
+#### Bedrock Permission Errors
+
+Verify IAM role has required Bedrock permissions:
+- `bedrock:InvokeModel`
+- `bedrock:InvokeModelWithResponseStream`
+- `bedrock:ListFoundationModels`
+
+### Log Analysis
+
 ```bash
-# Build and deploy
-docker build -t timecard-processor .
-aws apprunner create-service --cli-input-json file://apprunner.yaml
+# Filter logs by error level
+aws logs filter-log-events --log-group-name /ecs/timecard-processor --filter-pattern "ERROR"
+
+# Monitor real-time logs
+aws logs tail /ecs/timecard-processor --follow --filter-pattern "{ $.level = \"ERROR\" }"
 ```
 
-### Environment Configuration
-- Development: `localhost:3000` (React) + `localhost:8000` (Flask)
-- Production: Single container with built React app served by Flask
+## Development
 
-## 📈 Performance
+### Local Development Setup
 
-### Optimization Features
-- **Token-optimized LLM prompts**: 60% reduction in API costs
-- **Compact array format**: Efficient data transfer
-- **Real-time progress updates**: WebSocket-like responsiveness
-- **Efficient job queue management**: SQLite-based persistence
-- **Background processing threads**: Non-blocking operations
+1. **Database**: Uses SQLite automatically when `DATABASE_URL` is not set
+2. **AWS Services**: Configure AWS CLI with development credentials
+3. **Frontend**: React development server with hot reload
+4. **Backend**: Flask development server with auto-reload
 
-### Model Performance Comparison
-- **Claude Opus 4.1**: Highest accuracy, slower processing, higher cost
-- **Claude Sonnet 4**: Balanced performance, recommended for most use cases
-- **Claude 3.7 Sonnet**: Faster processing, lower cost, good for simple timecards
+### Testing
 
-### Scalability Metrics
-- **Processing**: 1-10 concurrent jobs (configurable via UI)
-- **Throughput**: ~10-20 files per minute (model-dependent)
-- **File size**: Up to 16MB per upload
-- **Queue capacity**: Unlimited (database-based)
-- **Settings persistence**: Real-time configuration updates
+```bash
+# Backend tests
+cd backend
+python -m pytest tests/
 
-## 🤝 Contributing
+# Frontend tests
+cd frontend
+npm test
+
+# Integration tests
+npm run test:integration
+```
+
+### Contributing
 
 1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open Pull Request
+2. Create a feature branch (`git checkout -b feature/new-feature`)
+3. Commit changes (`git commit -am 'Add new feature'`)
+4. Push to branch (`git push origin feature/new-feature`)
+5. Create Pull Request
 
-## 📄 License
+## Deployment Pipeline
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Automated Deployment
 
-## 🆘 Support
+The Terraform configuration includes automated deployment triggers:
 
-For support and questions:
-- Create an issue in the repository
-- Check the troubleshooting section
-- Review AWS Bedrock documentation
-- Verify AWS credentials and permissions
+- **Code Changes**: Detects changes in backend Python files, frontend React files, and Dockerfile
+- **Docker Build**: Automatically builds and pushes new images to ECR
+- **ECS Update**: Forces new deployment with updated container images
+- **Frontend Deploy**: Builds React app and uploads to S3 with CloudFront invalidation
 
-## 🔄 Recent Updates
+### Manual Deployment
 
-### Version 1.1.0 (Latest)
-- ✅ **Multi-Model Support**: Claude Opus 4.1, Sonnet 4, and 3.7 Sonnet
-- ✅ **Configurable Compliance**: Editable wage laws and validation rules
-- ✅ **Enhanced Settings UI**: Real-time configuration with database persistence
-- ✅ **System Information**: Platform detection and browser compatibility
-- ✅ **Improved Validation**: Dynamic compliance checking with custom parameters
+```bash
+# Force rebuild and redeploy
+terraform apply -replace="null_resource.docker_build_push"
 
-### Version 1.0.0
-- ✅ **Core Pipeline**: Excel → Markdown → LLM → Validation
-- ✅ **Job Queue System**: Asynchronous processing with progress tracking
-- ✅ **AWS Integration**: Bedrock and Claude Sonnet integration
-- ✅ **Review Queue**: Human-in-the-loop validation workflow
-- ✅ **Dashboard UI**: Real-time monitoring and management
+# Update only frontend
+terraform apply -target="null_resource.upload_frontend"
 
-## 🛠️ Technology Stack
+# Update only ECS service
+terraform apply -target="null_resource.ecs_service_update"
+```
 
-### Backend
-- **Python 3.9+** with Flask web framework
-- **AWS Bedrock** for AI model access
-- **SQLite** for job queue and settings persistence
-- **Pandas** for Excel/CSV processing
-- **Boto3** for AWS service integration
+## License
 
-### Frontend
-- **React 18** with modern hooks and context
-- **Cloudscape Design System** for AWS Console-style UI
-- **Real-time Updates** via polling and state management
-- **Responsive Design** for desktop and mobile
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-### AI Models
-- **Claude Opus 4.1**: `anthropic.claude-opus-4-1-20250805-v1:0`
-- **Claude Sonnet 4**: `anthropic.claude-sonnet-4-20250514-v1:0`
-- **Claude 3.7 Sonnet**: `anthropic.claude-3-7-sonnet-20250219-v1:0`
+## Support
+
+For questions, issues, or contributions:
+
+1. Check existing [Issues](../../issues)
+2. Create a new issue with detailed description
+3. For security issues, please email [security@example.com](mailto:security@example.com)
+
+## Additional Resources
+
+- [AWS Bedrock Documentation](https://docs.aws.amazon.com/bedrock/)
+- [ECS Fargate Best Practices](https://docs.aws.amazon.com/AmazonECS/latest/bestpracticesguide/)
+- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [React Cloudscape Design System](https://cloudscape.design/)
 
 ---
 
-**Built with AWS Bedrock, Multiple Claude Models, and Cloudscape Design System**
+**Note**: This is a sample application for demonstration purposes. Review and modify security settings, resource configurations, and access policies according to your organization's requirements before deploying to production environments.

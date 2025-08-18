@@ -3,7 +3,7 @@
 Database models and management for timecard processing system
 """
 
-import sqlite3
+import os
 import json
 import logging
 from datetime import datetime, timedelta
@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass, asdict
 from enum import Enum
+
+# Database imports - conditional based on availability
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    POSTGRES_AVAILABLE = False
+
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +71,80 @@ class Job:
 
 class DatabaseManager:
     def __init__(self, db_path: str = "timecard_processor.db"):
+        # Check for PostgreSQL connection string in environment
+        self.database_url = os.getenv('DATABASE_URL')
         self.db_path = db_path
+        self.use_postgres = bool(self.database_url and POSTGRES_AVAILABLE)
+        
+        if self.use_postgres:
+            logger.info("Using PostgreSQL database")
+        else:
+            logger.info("Using SQLite database")
+            
         self.init_database()
+
+    def _get_connection(self):
+        """Get database connection based on configuration"""
+        if self.use_postgres:
+            import time
+            max_retries = 5
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    conn = psycopg2.connect(self.database_url, cursor_factory=RealDictCursor)
+                    # Test the connection
+                    with conn.cursor() as cursor:
+                        cursor.execute("SELECT 1")
+                    return conn
+                except psycopg2.OperationalError as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Database connection attempt {attempt + 1} failed: {e}. Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"Failed to connect to PostgreSQL after {max_retries} attempts: {e}")
+                        raise
+        else:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+    def _execute_query(self, query: str, params: tuple = (), fetch_one: bool = False, fetch_all: bool = False):
+        """Execute query with appropriate parameter style"""
+        if self.use_postgres:
+            # Convert ? to %s for PostgreSQL
+            pg_query = query.replace('?', '%s')
+            with self._get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(pg_query, params)
+                    if fetch_one:
+                        return cursor.fetchone()
+                    elif fetch_all:
+                        return cursor.fetchall()
+                    else:
+                        conn.commit()
+                        return cursor.rowcount
+        else:
+            with self._get_connection() as conn:
+                cursor = conn.execute(query, params)
+                if fetch_one:
+                    return cursor.fetchone()
+                elif fetch_all:
+                    return cursor.fetchall()
+                else:
+                    conn.commit()
+                    return cursor.rowcount
 
     def init_database(self):
         """Initialize database tables"""
+        if self.use_postgres:
+            self._init_postgres()
+        else:
+            self._init_sqlite()
+
+    def _init_sqlite(self):
+        """Initialize SQLite database"""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -112,6 +191,55 @@ class DatabaseManager:
 
             conn.commit()
 
+    def _init_postgres(self):
+        """Initialize PostgreSQL database"""
+        with self._get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS jobs (
+                        id VARCHAR(36) PRIMARY KEY,
+                        type VARCHAR(100) NOT NULL,
+                        status VARCHAR(20) NOT NULL,
+                        priority INTEGER NOT NULL,
+                        file_name VARCHAR(255) NOT NULL,
+                        file_size BIGINT NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        updated_at TIMESTAMP NOT NULL,
+                        started_at TIMESTAMP,
+                        completed_at TIMESTAMP,
+                        progress INTEGER DEFAULT 0,
+                        result JSONB,
+                        error TEXT,
+                        metadata JSONB
+                    )
+                """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS settings (
+                        key VARCHAR(100) PRIMARY KEY,
+                        value JSONB NOT NULL,
+                        updated_at TIMESTAMP NOT NULL
+                    )
+                """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)
+                """
+                )
+
+                cursor.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at)
+                """
+                )
+
+            conn.commit()
+
     def create_job(
         self,
         job_type: str,
@@ -126,37 +254,64 @@ class DatabaseManager:
         job_id = str(uuid.uuid4())
         now = datetime.utcnow()
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs (
-                    id, type, status, priority, file_name, file_size,
-                    created_at, updated_at, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    job_id,
-                    job_type,
-                    JobStatus.PENDING.value,
-                    priority.value,
-                    file_name,
-                    file_size,
-                    now.isoformat(),
-                    now.isoformat(),
-                    json.dumps(metadata) if metadata else None,
-                ),
-            )
-            conn.commit()
+        with self._get_connection() as conn:
+            if self.use_postgres:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        INSERT INTO jobs (
+                            id, type, status, priority, file_name, file_size,
+                            created_at, updated_at, metadata
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                        (
+                            job_id,
+                            job_type,
+                            JobStatus.PENDING.value,
+                            priority.value,
+                            file_name,
+                            file_size,
+                            now,
+                            now,
+                            json.dumps(metadata) if metadata else None,
+                        ),
+                    )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (
+                        id, type, status, priority, file_name, file_size,
+                        created_at, updated_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        job_id,
+                        job_type,
+                        JobStatus.PENDING.value,
+                        priority.value,
+                        file_name,
+                        file_size,
+                        now.isoformat(),
+                        now.isoformat(),
+                        json.dumps(metadata) if metadata else None,
+                    ),
+                )
+                conn.commit()
 
         logger.info(f"Created job {job_id}: {job_type}")
         return job_id
 
     def get_job(self, job_id: str) -> Optional[Job]:
         """Get job by ID"""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
-            row = cursor.fetchone()
+        with self._get_connection() as conn:
+            if self.use_postgres:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
+                    row = cursor.fetchone()
+            else:
+                cursor = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,))
+                row = cursor.fetchone()
 
             if not row:
                 return None
@@ -171,39 +326,47 @@ class DatabaseManager:
         params = []
 
         if status_filter:
-            placeholders = ",".join("?" * len(status_filter))
+            if self.use_postgres:
+                placeholders = ",".join("%s" * len(status_filter))
+            else:
+                placeholders = ",".join("?" * len(status_filter))
             query += f" WHERE status IN ({placeholders})"
             params.extend(status_filter)
 
-        query += " ORDER BY created_at DESC LIMIT ?"
+        if self.use_postgres:
+            query += " ORDER BY created_at DESC LIMIT %s"
+        else:
+            query += " ORDER BY created_at DESC LIMIT ?"
         params.append(limit)
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(query, params)
-            rows = cursor.fetchall()
+        with self._get_connection() as conn:
+            if self.use_postgres:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    rows = cursor.fetchall()
+            else:
+                cursor = conn.execute(query, params)
+                rows = cursor.fetchall()
 
             return [self._row_to_job(row) for row in rows]
 
     def get_next_job(self) -> Optional[Job]:
         """Get next pending job by priority"""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute(
-                """
-                SELECT * FROM jobs 
-                WHERE status = ? 
-                ORDER BY priority DESC, created_at ASC 
-                LIMIT 1
-            """,
-                (JobStatus.PENDING.value,),
-            )
-            row = cursor.fetchone()
+        row = self._execute_query(
+            """
+            SELECT * FROM jobs 
+            WHERE status = ? 
+            ORDER BY priority DESC, created_at ASC 
+            LIMIT 1
+        """,
+            (JobStatus.PENDING.value,),
+            fetch_one=True
+        )
 
-            if not row:
-                return None
+        if not row:
+            return None
 
-            return self._row_to_job(row)
+        return self._row_to_job(row)
 
     def update_job_status(
         self,
@@ -360,6 +523,27 @@ class DatabaseManager:
 
     def _row_to_job(self, row) -> Job:
         """Convert database row to Job object"""
+        if self.use_postgres:
+            # PostgreSQL returns datetime objects directly
+            created_at = row["created_at"] if isinstance(row["created_at"], datetime) else datetime.fromisoformat(row["created_at"])
+            updated_at = row["updated_at"] if isinstance(row["updated_at"], datetime) else datetime.fromisoformat(row["updated_at"])
+            started_at = row["started_at"] if row["started_at"] and isinstance(row["started_at"], datetime) else (datetime.fromisoformat(row["started_at"]) if row["started_at"] else None)
+            completed_at = row["completed_at"] if row["completed_at"] and isinstance(row["completed_at"], datetime) else (datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None)
+            
+            # PostgreSQL JSONB fields are already parsed
+            result = row["result"] if row["result"] else None
+            metadata = row["metadata"] if row["metadata"] else None
+        else:
+            # SQLite returns strings that need parsing
+            created_at = datetime.fromisoformat(row["created_at"])
+            updated_at = datetime.fromisoformat(row["updated_at"])
+            started_at = datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
+            completed_at = datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None
+            
+            # SQLite JSON fields need parsing
+            result = json.loads(row["result"]) if row["result"] else None
+            metadata = json.loads(row["metadata"]) if row["metadata"] else None
+
         return Job(
             id=row["id"],
             type=row["type"],
@@ -367,20 +551,14 @@ class DatabaseManager:
             priority=JobPriority(row["priority"]),
             file_name=row["file_name"],
             file_size=row["file_size"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            started_at=(
-                datetime.fromisoformat(row["started_at"]) if row["started_at"] else None
-            ),
-            completed_at=(
-                datetime.fromisoformat(row["completed_at"])
-                if row["completed_at"]
-                else None
-            ),
+            created_at=created_at,
+            updated_at=updated_at,
+            started_at=started_at,
+            completed_at=completed_at,
             progress=row["progress"],
-            result=json.loads(row["result"]) if row["result"] else None,
+            result=result,
             error=row["error"],
-            metadata=json.loads(row["metadata"]) if row["metadata"] else None,
+            metadata=metadata,
         )
 
     # Settings management
