@@ -89,6 +89,11 @@ class JobService {
     return response.data;
   }
 
+  async bulkCompleteReview(jobIds) {
+    const response = await axios.post(`${API_BASE}/jobs/bulk-complete-review`, { job_ids: jobIds });
+    return response.data;
+  }
+
   async cleanupQueue(days = 7) {
     const response = await axios.post(`${API_BASE}/queue/cleanup`, { days });
     return response.data;

@@ -68,9 +68,7 @@ const UploadPage = ({ addNotification }) => {
       addNotification({
         type: 'success',
         header: 'File uploaded successfully',
-        content: `Job ${result.job_id} created for ${result.file_name}`,
-        buttonText: 'View Job',
-        onButtonClick: () => navigate(`/jobs/${result.job_id}`)
+        content: `Job ${result.job_id} created for ${result.file_name}`
       });
 
       // Reset form
@@ -78,10 +76,8 @@ const UploadPage = ({ addNotification }) => {
       setUploadProgress(0);
       setCurrentStep(0);
 
-      // Navigate to jobs page after a short delay
-      setTimeout(() => {
-        navigate('/jobs');
-      }, 2000);
+      // Navigate to job details page immediately
+      navigate(`/jobs/${result.job_id}`);
 
     } catch (error) {
       addNotification({
@@ -102,10 +98,11 @@ const UploadPage = ({ addNotification }) => {
       addNotification({
         type: 'success',
         header: 'Sample file queued',
-        content: `Job ${result.job_id} created for ${filename}`,
-        buttonText: 'View Job',
-        onButtonClick: () => navigate(`/jobs/${result.job_id}`)
+        content: `Job ${result.job_id} created for ${filename}`
       });
+
+      // Navigate to job details page immediately
+      navigate(`/jobs/${result.job_id}`);
 
     } catch (error) {
       addNotification({

@@ -810,14 +810,7 @@ const JobDetails = ({ addNotification }) => {
   if (error) {
     return (
       <SpaceBetween size="l">
-        <Header
-          variant="h1"
-          actions={
-            <Button variant="primary" onClick={() => navigate('/jobs')}>
-              Back to Jobs
-            </Button>
-          }
-        >
+        <Header variant="h1">
           Job Details
         </Header>
 
@@ -854,12 +847,7 @@ const JobDetails = ({ addNotification }) => {
                   >
                     Try Again
                   </Button>
-                  <Button
-                    iconName="external"
-                    onClick={() => navigate('/jobs')}
-                  >
-                    Back to Jobs
-                  </Button>
+
                 </SpaceBetween>
               </SpaceBetween>
             </Box>
@@ -872,14 +860,7 @@ const JobDetails = ({ addNotification }) => {
   if (!job) {
     return (
       <SpaceBetween size="l">
-        <Header
-          variant="h1"
-          actions={
-            <Button variant="primary" onClick={() => navigate('/jobs')}>
-              Back to Jobs
-            </Button>
-          }
-        >
+        <Header variant="h1">
           Job Details
         </Header>
 
@@ -905,13 +886,7 @@ const JobDetails = ({ addNotification }) => {
                 </Box>
 
                 <SpaceBetween direction="horizontal" size="s">
-                  <Button
-                    variant="primary"
-                    iconName="external"
-                    onClick={() => navigate('/jobs')}
-                  >
-                    View All Jobs
-                  </Button>
+
                   <Button
                     iconName="upload"
                     onClick={() => navigate('/upload')}
@@ -980,9 +955,7 @@ const JobDetails = ({ addNotification }) => {
                 Delete Job
               </Button>
             )}
-            <Button variant="link" onClick={() => navigate('/jobs')}>
-              Back to Jobs
-            </Button>
+
           </SpaceBetween>
         }
       >

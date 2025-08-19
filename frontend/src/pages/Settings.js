@@ -19,6 +19,7 @@ const Settings = ({ addNotification }) => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [systemInfo, setSystemInfo] = useState({});
+  const [automatedReasoningStatus, setAutomatedReasoningStatus] = useState({});
   const [errorCount, setErrorCount] = useState(0);
   const [hasError, setHasError] = useState(false);
 
@@ -52,6 +53,7 @@ const Settings = ({ addNotification }) => {
 
       setSettings(transformedSettings);
       setSystemInfo(response.system_info || {});
+      setAutomatedReasoningStatus(response.automated_reasoning_status || {});
       setLoading(false);
       setErrorCount(0); // Reset error count on success
       setHasError(false);
@@ -110,6 +112,35 @@ const Settings = ({ addNotification }) => {
     fetchSettings();
   }, [fetchSettings]);
 
+  // Auto-check Automated Reasoning progress when status is 'creating'
+  useEffect(() => {
+    if (automatedReasoningStatus.status !== 'creating') {
+      return;
+    }
+
+    const checkProgress = async () => {
+      try {
+        const response = await fetch('/api/automated-reasoning/check-progress', {
+          method: 'POST'
+        });
+        const result = await response.json();
+        
+        if (result.status === 'success' && result.result?.status !== 'creating') {
+          // Status changed, refresh settings
+          fetchSettings();
+        }
+      } catch (error) {
+        console.error('Auto progress check failed:', error);
+      }
+    };
+
+    // Check immediately, then every 30 seconds
+    checkProgress();
+    const interval = setInterval(checkProgress, 30000);
+    
+    return () => clearInterval(interval);
+  }, [automatedReasoningStatus.status, fetchSettings]);
+
 
 
   const getRegionOption = (value) => {
@@ -129,6 +160,21 @@ const Settings = ({ addNotification }) => {
       { label: 'Claude 3.7 Sonnet', value: 'us.anthropic.claude-3-7-sonnet-20250219-v1:0' }
     ];
     return options.find(opt => opt.value === value) || options[1];
+  };
+
+  const getAutomatedReasoningStatusDisplay = (status) => {
+    switch (status) {
+      case 'ready':
+        return 'Active';
+      case 'creating':
+        return 'Setting Up';
+      case 'failed':
+        return 'Failed';
+      case 'not_configured':
+        return 'Not Configured';
+      default:
+        return 'Unknown';
+    }
   };
 
   const handleCleanup = async () => {
@@ -349,6 +395,124 @@ const Settings = ({ addNotification }) => {
               <li>CloudWatch (for logging)</li>
             </ul>
           </Alert>
+        </SpaceBetween>
+      </Container>
+
+      {/* Configuration Validation */}
+      <Container
+        header={
+          <Header variant="h2">
+            Configuration Validation
+          </Header>
+        }
+      >
+        <SpaceBetween size="m">
+          <ColumnLayout columns={2}>
+            <Box>
+              <Box variant="h4">AWS Configuration Status</Box>
+              <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
+                <li>Credentials: {systemInfo.aws_config?.has_credentials ? 'Configured' : 'Missing'}</li>
+                <li>Region: {systemInfo.aws_config?.has_region ? settings.awsRegion?.label || 'Unknown' : 'Not Set'}</li>
+                <li>Bedrock Model: {systemInfo.aws_config?.bedrock_configured ? settings.claudeModel?.label || 'Unknown' : 'Not Configured'}</li>
+              </ul>
+            </Box>
+            <Box>
+              <Box variant="h4">Automated Reasoning Status</Box>
+              <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
+                <li>Status: {getAutomatedReasoningStatusDisplay(automatedReasoningStatus.status)}</li>
+                <li>Policy ARN: {automatedReasoningStatus.policy_arn ? 'Configured' : 'Not Set'}</li>
+                <li>Guardrail ID: {automatedReasoningStatus.guardrail_id ? 'Configured' : 'Not Set'}</li>
+                <li>Validation Method: {automatedReasoningStatus.validation_method || 'Fallback'}</li>
+              </ul>
+            </Box>
+          </ColumnLayout>
+
+          {automatedReasoningStatus.status === 'creating' && (
+            <Alert 
+              type="info"
+              action={
+                <Button
+                  onClick={async () => {
+                    try {
+                      const response = await fetch('/api/automated-reasoning/check-progress', {
+                        method: 'POST'
+                      });
+                      const result = await response.json();
+                      
+                      if (result.status === 'success') {
+                        // Refresh settings to get updated status
+                        fetchSettings();
+                        addNotification({
+                          type: 'info',
+                          header: 'Progress checked',
+                          content: result.message
+                        });
+                      } else if (result.status === 'rate_limited') {
+                        addNotification({
+                          type: 'warning',
+                          header: 'Rate limited',
+                          content: result.message
+                        });
+                      }
+                    } catch (error) {
+                      addNotification({
+                        type: 'error',
+                        header: 'Failed to check progress',
+                        content: error.message
+                      });
+                    }
+                  }}
+                >
+                  Check Progress
+                </Button>
+              }
+            >
+              <Box variant="h4">Automated Reasoning Setup In Progress</Box>
+              <Box>
+                The system is currently setting up Automated Reasoning for enhanced mathematical validation.
+                This process may take a few minutes to complete.
+              </Box>
+              {automatedReasoningStatus.message && (
+                <Box margin={{ top: "xs" }}>
+                  Status: {automatedReasoningStatus.message}
+                </Box>
+              )}
+            </Alert>
+          )}
+
+          {automatedReasoningStatus.status === 'ready' && (
+            <Alert type="success">
+              <Box variant="h4">Automated Reasoning Active</Box>
+              <Box>
+                Mathematical validation is active using Amazon Bedrock Automated Reasoning.
+                This provides up to 99% accuracy in detecting calculation errors and data inconsistencies.
+              </Box>
+            </Alert>
+          )}
+
+          {automatedReasoningStatus.status === 'failed' && (
+            <Alert type="error">
+              <Box variant="h4">Automated Reasoning Setup Failed</Box>
+              <Box>
+                The system failed to set up Automated Reasoning. Using fallback validation method.
+              </Box>
+              {automatedReasoningStatus.error && (
+                <Box margin={{ top: "xs" }}>
+                  Error: {automatedReasoningStatus.error}
+                </Box>
+              )}
+            </Alert>
+          )}
+
+          {(!automatedReasoningStatus.status || automatedReasoningStatus.status === 'not_configured') && (
+            <Alert type="warning">
+              <Box variant="h4">Automated Reasoning Not Configured</Box>
+              <Box>
+                Enhanced mathematical validation is not configured. The system will use basic validation methods.
+                Automated Reasoning setup will begin automatically when the application starts.
+              </Box>
+            </Alert>
+          )}
         </SpaceBetween>
       </Container>
 

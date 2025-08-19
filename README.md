@@ -2,6 +2,17 @@
 
 A scalable, AI-powered timecard processing system built on Amazon Bedrock with [Automated Reasoning](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-automated-reasoning-checks.html) validation and human-in-the-loop review capabilities.
 
+## Key Features
+
+- **3-Step Processing Pipeline**: Excel → Markdown → LLM Extraction → Automated Reasoning Validation
+- **Advanced Excel Processing**: Handles complex spreadsheet formats with enhanced parsing
+- **LLM-Powered Data Extraction**: Uses Claude Sonnet 4 for intelligent timecard data extraction
+- **Amazon Bedrock Automated Reasoning**: Mathematical validation using formal logic for up to 99% accuracy
+- **Federal Wage Compliance**: Automated validation against federal minimum wage laws with provable assurance
+- **Human-in-the-Loop**: Flags complex cases for human review with detailed reasoning
+- **Real-time Processing**: Asynchronous job queue with progress tracking
+- **Comprehensive Validation**: Multi-layered validation with detailed compliance reporting and formal verification
+
 ## Architecture Overview
 
 ![Architecture Diagram](preview.png)
@@ -222,6 +233,7 @@ When AI services are unavailable, the system can optionally route jobs directly 
 - Terraform 1.0+
 - Domain registered in Route 53 (optional)
 - ACM certificate (automatically provisioned if domain provided)
+- Amazon Bedrock Automated Reasoning access (preview/GA regions)
 
 ## Quick Start
 
@@ -235,7 +247,7 @@ cd sample-timecards-processing-with-amazon-bedrock
 # Backend setup
 cd backend
 pip install -r requirements.txt
-python app.py
+python app.py  # Automated Reasoning setup starts in background
 
 # Frontend setup (new terminal)
 cd frontend
@@ -259,6 +271,9 @@ cp terraform.tfvars.example terraform.tfvars
 terraform init
 terraform plan
 terraform apply
+
+# Automated Reasoning setup runs automatically when app starts
+# Check status: cd ../backend && python check_ar_status.py
 ```
 
 The deployment process automatically:
@@ -278,11 +293,16 @@ The deployment process automatically:
 - `AWS_DEFAULT_REGION`: AWS region for services
 - `S3_BUCKET`: S3 bucket for file uploads
 - `FLASK_ENV`: Set to "production"
+- `AUTOMATED_REASONING_POLICY_ARN`: ARN of the Automated Reasoning policy
+- `AUTOMATED_REASONING_GUARDRAIL_ID`: ID of the Automated Reasoning guardrail
+- `AUTOMATED_REASONING_GUARDRAIL_VERSION`: Version of the guardrail (default: DRAFT)
 
 #### Development (Local)
 - No `DATABASE_URL`: Automatically uses SQLite
 - `AWS_REGION`: For Bedrock API calls
 - `FLASK_ENV`: Set to "development"
+- `AUTOMATED_REASONING_POLICY_ARN`: ARN of the Automated Reasoning policy (optional)
+- `AUTOMATED_REASONING_GUARDRAIL_ID`: ID of the Automated Reasoning guardrail (optional)
 
 ### Terraform Variables
 
@@ -311,6 +331,195 @@ ecs_max_capacity  = 10
 # Auto Scaling
 enable_auto_scaling = true
 ```
+
+### Automated Reasoning Setup
+
+The system uses Amazon Bedrock Automated Reasoning for mathematical validation of timecard data. This provides up to 99% accuracy in detecting calculation errors and data inconsistencies using formal logic.
+
+#### Automatic Setup Flow
+
+The system automatically provisions Automated Reasoning resources **asynchronously** when first started:
+
+```bash
+cd backend
+python app.py  # Non-blocking auto-provisioning starts
+```
+
+**Setup Flow:**
+```
+1. App Start
+   ↓
+2. Check Status (not_configured) → Start Creation
+   ↓
+3. Create Policy (quick) → Status: creating
+   ↓
+4. Start Build Workflow → Background Processing
+   ↓
+5. App Ready (no blocking) → Users can upload files
+   ↓
+6. Build Completes → Create Guardrail → Status: ready
+   ↓
+7. Full Automated Reasoning Active
+```
+
+**Status Monitoring:**
+```bash
+# Check current status
+python check_ar_status.py
+
+# Via API
+curl http://localhost:5000/api/automated-reasoning/status
+```
+
+**What happens automatically:**
+- **Non-blocking**: App starts immediately, setup runs in background
+- **State tracking**: Progress saved in database
+- **Duplicate prevention**: Reuses existing policies
+- **Graceful fallback**: Basic validation until Automated Reasoning ready
+- **Progress monitoring**: Check status via API or script
+
+#### Status States
+
+- **`not_configured`**: Initial state, setup will start on first run
+- **`creating`**: Policy created, build workflow in progress
+- **`ready`**: Fully configured and active
+- **`failed`**: Setup failed, check logs and retry
+
+#### Troubleshooting
+
+```bash
+# Check detailed status
+cd backend
+python check_ar_status.py
+
+# Retry setup if failed
+curl -X POST http://localhost:5000/api/automated-reasoning/retry
+
+# Debug step-by-step
+python debug_provisioning.py
+```
+
+#### Mathematical Validation
+
+The system validates:
+- **Sum accuracy**: Total wage = sum of daily rates
+- **Count consistency**: Employee count matches unique employees
+- **Calculation correctness**: Average = total ÷ count
+- **Data integrity**: No negative values or missing fields
+
+## Usage Examples
+
+### Basic Timecard Processing
+
+```python
+from timecard_pipeline import TimecardPipeline
+from config_manager import ConfigManager
+from database import DatabaseManager
+
+# Initialize pipeline
+db_manager = DatabaseManager()
+config_manager = ConfigManager(db_manager)
+pipeline = TimecardPipeline(config_manager)
+
+# Process timecard file
+result = pipeline.process("sample_timecard.xlsx")
+
+if result["status"] == "success":
+    validation = result["validation"]
+    print(f"Employee: {validation['employee_name']}")
+    print(f"Total Wage: ${validation['total_wage']:.2f}")
+    print(f"Validation: {validation['validation_result']}")
+    
+    if validation["requires_human_review"]:
+        print("WARNING: Requires human review")
+        for issue in validation["validation_issues"]:
+            print(f"  - {issue}")
+```
+
+### Automated Reasoning Validation Results
+
+The system applies Automated Reasoning during LLM extraction and returns detailed validation results:
+
+```json
+{
+  "validation_result": "INVALID",
+  "employee_name": "Jane Smith",
+  "total_wage": 800.00,
+  "average_daily_rate": 400.00,
+  "validation_issues": [
+    "Sum calculation error: Total wage (800.00) ≠ Sum of daily rates (700.00)",
+    "Average calculation error: Reported (400.00) ≠ Calculated (350.00)"
+  ],
+  "mathematical_consistency": false,
+  "automated_reasoning_applied": true,
+  "extraction_method": "tool_use_with_guardrail",
+  "model_info": {
+    "model_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "guardrail_applied": true
+  },
+  "validation_method": "automated_reasoning",
+  "validation_findings": [
+    {
+      "result": "INVALID",
+      "ruleId": "sum_validation_check",
+      "ruleDescription": "Total wage must equal sum of all daily rates",
+      "variables": {
+        "reported_total_wage": 800.00,
+        "calculated_sum": 700.00
+      },
+      "suggestions": ["Correct total wage to 700.00"]
+    }
+  ],
+  "mathematical_validation": {
+    "sum_correct": false,
+    "average_correct": false,
+    "count_correct": true,
+    "data_integrity": true
+  }
+}
+```
+
+### Mathematical Validation Example
+
+Test mathematical consistency of timecard data:
+
+```python
+from automated_reasoning_utils import run_valid_at_n_experiment
+
+# Test data with calculation error
+user_query = "Validate timecard: 3 days, rates [200, 250, 300], total wage: 800"
+initial_response = "Total wage 800 is correct for 3 days of work"
+
+# Run experiment to see how many iterations needed to fix the error
+results = run_valid_at_n_experiment(
+    user_query=user_query,
+    initial_response=initial_response,
+    policy_definition=policy_def,
+    guardrail_id="your-guardrail-id",
+    guardrail_version="DRAFT",
+    runtime_client=bedrock_runtime
+)
+
+print(f"Valid at N = {results['n_value']}")
+print(f"Final corrected response: {results['final_valid_response']}")
+# Expected: "Total wage should be 750 (200+250+300), not 800"
+```
+
+### Testing Mathematical Validation
+
+Run comprehensive tests for mathematical validation:
+
+```bash
+cd backend
+python test_automated_reasoning.py
+```
+
+This tests various scenarios:
+- Correct calculations and counts
+- Sum calculation errors  
+- Count mismatches
+- Negative values
+- Missing data fields
 
 ## API Reference
 
@@ -469,6 +678,40 @@ Response:
 }
 ```
 
+### Automated Reasoning Management
+
+#### Get Automated Reasoning Status
+```http
+GET /api/automated-reasoning/status
+Response:
+{
+  "status": "ready",
+  "policy_arn": "arn:aws:bedrock:us-west-2:123456789012:automated-reasoning-policy/abc123",
+  "guardrail_id": "guardrail-xyz789",
+  "guardrail_version": "DRAFT",
+  "message": "Automated Reasoning setup completed successfully!",
+  "build_status": null,
+  "created": true,
+  "error": null,
+  "last_check": 1642781234.567,
+  "created_at": 1642780000.123
+}
+```
+
+#### Retry Automated Reasoning Setup
+```http
+POST /api/automated-reasoning/retry
+Response:
+{
+  "status": "success",
+  "message": "Automated Reasoning setup retry initiated",
+  "result": {
+    "status": "creating",
+    "policy_arn": "arn:aws:bedrock:us-west-2:123456789012:automated-reasoning-policy/new123"
+  }
+}
+```
+
 ### Health and Monitoring
 
 #### Health Check
@@ -518,30 +761,30 @@ HTTP 500 Internal Server Error
 
 ### Jobs Table
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | VARCHAR(36) | Unique job identifier |
-| type | VARCHAR(100) | Job type (e.g., "timecard_processing") |
-| status | VARCHAR(20) | Current job status |
-| priority | INTEGER | Job priority (1-4) |
-| file_name | VARCHAR(255) | Original filename |
-| file_size | BIGINT | File size in bytes |
-| created_at | TIMESTAMP | Job creation time |
-| updated_at | TIMESTAMP | Last update time |
-| started_at | TIMESTAMP | Processing start time |
-| completed_at | TIMESTAMP | Processing completion time |
-| progress | INTEGER | Progress percentage (0-100) |
-| result | JSONB | Processing results |
-| error | TEXT | Error message if failed |
-| metadata | JSONB | Additional job metadata |
+| Column       | Type         | Description                            |
+| ------------ | ------------ | -------------------------------------- |
+| id           | VARCHAR(36)  | Unique job identifier                  |
+| type         | VARCHAR(100) | Job type (e.g., "timecard_processing") |
+| status       | VARCHAR(20)  | Current job status                     |
+| priority     | INTEGER      | Job priority (1-4)                     |
+| file_name    | VARCHAR(255) | Original filename                      |
+| file_size    | BIGINT       | File size in bytes                     |
+| created_at   | TIMESTAMP    | Job creation time                      |
+| updated_at   | TIMESTAMP    | Last update time                       |
+| started_at   | TIMESTAMP    | Processing start time                  |
+| completed_at | TIMESTAMP    | Processing completion time             |
+| progress     | INTEGER      | Progress percentage (0-100)            |
+| result       | JSONB        | Processing results                     |
+| error        | TEXT         | Error message if failed                |
+| metadata     | JSONB        | Additional job metadata                |
 
 ### Settings Table
 
-| Column | Type | Description |
-|--------|------|-------------|
-| key | VARCHAR(100) | Setting key |
-| value | JSONB | Setting value |
-| updated_at | TIMESTAMP | Last update time |
+| Column     | Type         | Description      |
+| ---------- | ------------ | ---------------- |
+| key        | VARCHAR(100) | Setting key      |
+| value      | JSONB        | Setting value    |
+| updated_at | TIMESTAMP    | Last update time |
 
 ## Monitoring and Observability
 

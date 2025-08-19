@@ -47,6 +47,16 @@ class ConfigManager:
                 'human_review_triggers': True
             },
             
+            # Automated Reasoning Guardrails
+            'automated_reasoning_guardrail_id': None,  # Set via environment or admin UI
+            'automated_reasoning_guardrail_version': 'DRAFT',
+            'automated_reasoning_policy_arn': None,  # Set via environment or admin UI
+            'automated_reasoning_confidence_threshold': 1.0,
+            'automated_reasoning_status': 'not_configured',  # not_configured, creating, ready, failed
+            'automated_reasoning_build_workflow_id': None,
+            'automated_reasoning_created_at': None,
+            'automated_reasoning_last_check': None,
+            
             # Review Triggers
             'review_triggers': {
                 'rate_below_federal_minimum': True,
@@ -101,9 +111,15 @@ class ConfigManager:
         return settings
 
     def update_multiple(self, settings: Dict[str, Any]):
-        """Update multiple settings at once"""
-        for key, value in settings.items():
-            self.set(key, value)
+        """Update multiple settings atomically"""
+        # Use atomic database update if available
+        if hasattr(self.db, 'update_multiple_settings'):
+            self.db.update_multiple_settings(settings)
+            logger.info(f"Updated {len(settings)} settings atomically")
+        else:
+            # Fallback to individual updates
+            for key, value in settings.items():
+                self.set(key, value)
 
     # Convenience methods for common settings
     @property
@@ -169,6 +185,36 @@ class ConfigManager:
             'high_daily_rates_threshold': 2000,
             'salary_exempt_excessive_hours': True
         })
+
+    @property
+    def automated_reasoning_guardrail_id(self) -> Optional[str]:
+        # Check environment variable first, then database
+        env_value = os.environ.get('AUTOMATED_REASONING_GUARDRAIL_ID')
+        if env_value:
+            return env_value
+        return self.get('automated_reasoning_guardrail_id')
+
+    @property
+    def automated_reasoning_guardrail_version(self) -> str:
+        env_value = os.environ.get('AUTOMATED_REASONING_GUARDRAIL_VERSION')
+        if env_value:
+            return env_value
+        return self.get('automated_reasoning_guardrail_version', 'DRAFT')
+
+    @property
+    def automated_reasoning_policy_arn(self) -> Optional[str]:
+        env_value = os.environ.get('AUTOMATED_REASONING_POLICY_ARN')
+        if env_value:
+            return env_value
+        return self.get('automated_reasoning_policy_arn')
+
+    @property
+    def automated_reasoning_confidence_threshold(self) -> float:
+        return self.get('automated_reasoning_confidence_threshold', 1.0)
+
+    def get_automated_reasoning_status(self) -> str:
+        """Get current Automated Reasoning status"""
+        return self.get('automated_reasoning_status', 'not_configured')
 
     def get_aws_credentials(self) -> Dict[str, Optional[str]]:
         """Get AWS credentials from environment"""

@@ -57,6 +57,9 @@ class TimecardPipeline:
         self.guardrails = boto3.client(
             "bedrock", region_name=region, config=boto_config
         )
+        
+        # Auto-provision Automated Reasoning if needed
+        self._ensure_automated_reasoning_ready()
 
         # Initialize compliance rules from configuration
         if self.config:
@@ -70,6 +73,80 @@ class TimecardPipeline:
             self.compliance = WageCompliance()
 
         self.review_queue = []
+
+    def _ensure_automated_reasoning_ready(self):
+        """Ensure Automated Reasoning is provisioned (non-blocking)"""
+        try:
+            from automated_reasoning_provisioner import auto_provision_if_needed
+            
+            logger.info("Checking Automated Reasoning configuration...")
+            
+            # Non-blocking check/provision
+            result = auto_provision_if_needed(
+                config_manager=self.config,
+                region_name=self.config.aws_region if self.config else "us-west-2"
+            )
+            
+            status = result.get("status", "unknown")
+            policy_arn = result.get("policy_arn")
+            guardrail_id = result.get("guardrail_id")
+            
+            if status == "ready":
+                logger.info("Automated Reasoning is READY")
+                logger.info(f"   Policy ARN: {policy_arn}")
+                logger.info(f"   Guardrail ID: {guardrail_id}")
+                logger.info("   Mathematical validation will use formal logic")
+            elif status == "creating":
+                logger.info("Automated Reasoning setup IN PROGRESS")
+                logger.info(f"   Policy ARN: {policy_arn}")
+                logger.info(f"   Status: {result.get('message', 'Creation in progress')}")
+                logger.info("   Using fallback validation until ready")
+            elif status == "failed":
+                logger.warning("Automated Reasoning setup FAILED")
+                logger.warning(f"   Error: {result.get('error', 'Unknown error')}")
+                logger.info("   Using fallback mathematical validation")
+            else:
+                logger.info(f"Automated Reasoning status: {status}")
+                logger.info("   Using fallback mathematical validation")
+            
+        except Exception as e:
+            logger.warning(f"Failed to check Automated Reasoning: {e}")
+            logger.info("   Using fallback mathematical validation")
+
+    def _get_guardrail_config(self) -> Optional[Dict[str, Any]]:
+        """Get guardrail configuration for LLM calls"""
+        try:
+            if not self.config:
+                logger.debug("No config manager available")
+                return None
+            
+            guardrail_id = self.config.automated_reasoning_guardrail_id
+            guardrail_version = self.config.automated_reasoning_guardrail_version
+            ar_status = self.config.get('automated_reasoning_status', 'unknown')
+            
+            logger.debug(f"Guardrail config check:")
+            logger.debug(f"   Status: {ar_status}")
+            logger.debug(f"   Guardrail ID: {guardrail_id or 'None'}")
+            logger.debug(f"   Version: {guardrail_version}")
+            
+            if guardrail_id and ar_status == 'ready':
+                config = {
+                    "guardrailIdentifier": guardrail_id,
+                    "guardrailVersion": guardrail_version,
+                    "trace": "enabled"  # Enable tracing for debugging
+                }
+                logger.debug(f"Returning guardrail config: {guardrail_id}")
+                return config
+            elif guardrail_id and ar_status == 'creating':
+                logger.debug(f"Guardrail exists but status is 'creating', not using yet")
+                return None
+            else:
+                logger.debug(f"No guardrail available (status: {ar_status})")
+                return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to get guardrail config: {e}")
+            return None
 
     def step1_excel_to_markdown(self, excel_path: str) -> str:
         """Step 1: Convert Excel to LLM-readable Markdown with enhanced processing"""
@@ -112,7 +189,7 @@ class TimecardPipeline:
                 raise Exception(f"Excel conversion failed: {fallback_error}")
 
     def step2_llm_extraction(self, markdown: str) -> Dict[str, Any]:
-        """Step 2: LLM extraction for timecard data using Claude Sonnet"""
+        """Step 2: LLM extraction with integrated Automated Reasoning validation"""
 
         # Always use LLM extraction - no pre-processing assumptions
         prompt = f"""
@@ -271,20 +348,87 @@ class TimecardPipeline:
             # Set max tokens based on model
             max_tokens = self._get_max_tokens_for_model(model_id)
 
-            # Use Converse API with Tool Use - with retry logic
-            response = self._call_bedrock_with_retry(
-                modelId=model_id,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
-                toolConfig={"tools": [{"toolSpec": tool_schema}]},
-                inferenceConfig={
+            # Get guardrail configuration for mathematical validation
+            guardrail_config = self._get_guardrail_config()
+            
+            # Use Converse API with Tool Use and Guardrail - with retry logic
+            converse_params = {
+                "modelId": model_id,
+                "messages": [{"role": "user", "content": [{"text": prompt}]}],
+                "toolConfig": {"tools": [{"toolSpec": tool_schema}]},
+                "inferenceConfig": {
                     "maxTokens": max_tokens,
                     "temperature": 0.1,
                     "topP": 1,
                 },
-            )
+            }
+            
+            # Add guardrail configuration if available
+            if guardrail_config:
+                converse_params["guardrailConfig"] = guardrail_config
+                guardrail_id = guardrail_config.get("guardrailIdentifier", "unknown")
+                logger.info(f"Using Automated Reasoning Guardrail: {guardrail_id}")
+                logger.info(f"   Policy ARN: {self.config.automated_reasoning_policy_arn if self.config else 'unknown'}")
+            else:
+                ar_status = self.config.get('automated_reasoning_status', 'unknown') if self.config else 'unknown'
+                logger.info(f"Automated Reasoning NOT active (status: {ar_status})")
+                logger.info("   Using fallback mathematical validation")
+            
+            response = self._call_bedrock_with_retry(**converse_params)
 
-            # Extract tool use result
+            # Extract tool use result and guardrail information
             output_message = response["output"]["message"]
+            
+            # Check for guardrail intervention
+            guardrail_action = "NONE"
+            guardrail_findings = []
+            validation_passed = True
+            validation_confidence = 1.0
+            
+            if "trace" in response and "guardrail" in response["trace"]:
+                guardrail_trace = response["trace"]["guardrail"]
+                guardrail_action = guardrail_trace.get("action", "NONE")
+                
+                logger.info(f"Automated Reasoning Guardrail Response:")
+                logger.info(f"   Action: {guardrail_action}")
+                
+                # Extract Automated Reasoning findings if available
+                if "modelOutput" in guardrail_trace:
+                    model_output = guardrail_trace["modelOutput"]
+                    if "assessments" in model_output and "automatedReasoning" in model_output["assessments"]:
+                        ar_assessment = model_output["assessments"]["automatedReasoning"]
+                        guardrail_findings = ar_assessment.get("findings", [])
+                        
+                        logger.info(f"   Automated Reasoning Findings: {len(guardrail_findings)} findings")
+                        for i, finding in enumerate(guardrail_findings):
+                            result = finding.get("result", "UNKNOWN")
+                            rule_desc = finding.get("ruleDescription", "No description")
+                            logger.info(f"     Finding {i+1}: {result} - {rule_desc}")
+                        
+                        # Check if validation passed
+                        if guardrail_action in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
+                            validation_passed = False
+                            validation_confidence = 0.3
+                            logger.info(f"   Validation FAILED: Guardrail {guardrail_action}")
+                        elif any(f.get("result") == "INVALID" for f in guardrail_findings):
+                            validation_passed = False
+                            validation_confidence = 0.5
+                            logger.info(f"   Validation FAILED: Invalid findings detected")
+                        elif any(f.get("result") == "SATISFIABLE" for f in guardrail_findings):
+                            validation_confidence = 0.7
+                            logger.info(f"   Validation PARTIAL: Satisfiable findings")
+                        else:
+                            logger.info(f"   Validation PASSED: All checks successful")
+                    else:
+                        logger.info(f"   No Automated Reasoning assessments found in trace")
+                else:
+                    logger.info(f"   No model output found in guardrail trace")
+            else:
+                if guardrail_config:
+                    logger.warning(f"Guardrail configured but no trace found in response")
+                    logger.warning(f"   This may indicate the guardrail is not properly attached")
+                else:
+                    logger.info(f"No guardrail trace (expected - no guardrail configured)")
 
             if "content" not in output_message:
                 raise Exception("No content in response")
@@ -317,12 +461,21 @@ class TimecardPipeline:
             else:
                 extracted = tool_use_content
 
-            extracted["extraction_method"] = "tool_use"
+            extracted["extraction_method"] = "tool_use_with_guardrail" if guardrail_action != "NONE" else "tool_use"
             extracted["model_info"] = {
                 "model_id": model_id,
                 "extraction_model": model_id,
                 "max_tokens": max_tokens,
+                "guardrail_applied": guardrail_action != "NONE",
             }
+            
+            # Add validation results from guardrail
+            extracted["validation_passed"] = validation_passed
+            extracted["validation_method"] = "automated_reasoning" if guardrail_findings else "none"
+            extracted["validation_findings"] = guardrail_findings
+            extracted["validation_confidence"] = validation_confidence
+            extracted["guardrail_action"] = guardrail_action
+            extracted["mathematical_consistency"] = self._is_mathematically_consistent(extracted)
 
             # Post-process and validate the extracted data
             extracted = self._post_process_extracted_data(extracted)
@@ -424,10 +577,12 @@ class TimecardPipeline:
 
         return extracted
 
+
+
     def step3_automated_reasoning(
         self, extracted_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Step 3: Validation using Amazon Bedrock Automated Reasoning with Human-in-Loop"""
+        """Step 3: Process validation results from step2 and generate final report"""
 
         # Extract key data with safe conversion
         employee_name = extracted_data.get("employee_name", "Unknown")
@@ -436,59 +591,29 @@ class TimecardPipeline:
         average_daily_rate = float(extracted_data.get("average_daily_rate") or 0)
         total_wage = float(extracted_data.get("total_wage") or 0)
 
-        # Calculate weekly equivalent for compliance
-        weekly_equivalent = (
-            (total_days / 7) * average_daily_rate if total_days > 0 else 0
-        )
-        is_salary_exempt = weekly_equivalent >= self.compliance.salary_exempt_threshold
+        # Get validation results from step2
+        validation_passed = extracted_data.get("validation_passed", True)
+        validation_method = extracted_data.get("validation_method", "none")
+        validation_findings = extracted_data.get("validation_findings", [])
+        mathematical_consistency = extracted_data.get("mathematical_consistency", True)
+        guardrail_action = extracted_data.get("guardrail_action", "NONE")
+        
+        # Log validation method used
+        if validation_method == "automated_reasoning":
+            policy_arn = self.config.automated_reasoning_policy_arn if self.config else "unknown"
+            logger.info(f"Step3: Processing Automated Reasoning results")
+            logger.info(f"   Policy ARN: {policy_arn}")
+            logger.info(f"   Guardrail Action: {guardrail_action}")
+            logger.info(f"   Validation Passed: {validation_passed}")
+            logger.info(f"   Findings: {len(validation_findings)} findings")
+        else:
+            logger.info(f"Step3: Using fallback mathematical validation")
+            logger.info(f"   Method: {validation_method}")
+            logger.info(f"   Mathematical Consistency: {mathematical_consistency}")
 
-        # Pre-validation checks
-        validation_issues = []
-        requires_human_review = False
 
-        # 1. Daily rate minimum wage check (assuming 8-hour day)
-        hourly_equivalent = average_daily_rate / 8 if average_daily_rate > 0 else 0
-        if (
-            hourly_equivalent > 0
-            and hourly_equivalent < self.compliance.federal_minimum_wage
-        ):
-            validation_issues.append(
-                f"Daily rate ${average_daily_rate:.2f} (${hourly_equivalent:.2f}/hr) below federal minimum ${self.compliance.federal_minimum_wage}"
-            )
 
-        # 2. Excessive days check (more than 7 days per week equivalent)
-        weekly_days = total_days / 7 if total_days > 0 else 0
-        if weekly_days > 6:  # More than 6 days per week
-            validation_issues.append(
-                f"Excessive work schedule ({weekly_days:.1f} days/week) requires management approval"
-            )
-            requires_human_review = True
-
-        # 3. High daily rate validation
-        if average_daily_rate > 2000:  # Very high daily rate
-            validation_issues.append(
-                f"High daily rate ${average_daily_rate:.2f} requires verification"
-            )
-            requires_human_review = True
-
-        # 4. Salary exempt validation
-        if (
-            is_salary_exempt and weekly_days > 5
-        ):  # Exempt employees working excessive days
-            validation_issues.append(
-                "Salary-exempt employee working excessive hours - verify job duties"
-            )
-            requires_human_review = True
-
-        # 5. Run rule-based validation (skip LLM for speed)
-        reasoning_result = {
-            "result": "VALID" if not validation_issues else "INVALID",
-            "confidence": 0.95,
-            "reasoning": "Rule-based validation completed",
-            "compliance_issues": validation_issues,
-        }
-
-        # 6. Calculate pay (for daily rate system, pay equals total wage)
+        # Calculate pay (for daily rate system, pay equals total wage)
         pay_calculation = {
             "regular_pay": total_wage,
             "overtime_pay": 0.0,  # No overtime concept in daily rate
@@ -496,13 +621,31 @@ class TimecardPipeline:
             "pay_type": "daily_rate",
         }
 
-        # 7. Determine final validation result
-        if requires_human_review:
-            final_result = ValidationResult.REQUIRES_HUMAN_REVIEW
-            self._add_to_review_queue(extracted_data, validation_issues)
+        # Determine validation issues based on step2 results
+        validation_issues = []
+        requires_human_review = False
+
+        if not validation_passed:
+            if validation_method == "automated_reasoning":
+                for finding in validation_findings:
+                    if finding.get("result") == "INVALID":
+                        rule_desc = finding.get("ruleDescription", "Mathematical validation failed")
+                        validation_issues.append(f"Data integrity issue: {rule_desc}")
+            elif not mathematical_consistency:
+                validation_issues.append("Mathematical inconsistencies detected in timecard data")
+
+        # If no Automated Reasoning, fall back to basic mathematical check
+        if validation_method == "none" and not mathematical_consistency:
+            math_errors = self._get_mathematical_errors(extracted_data)
+            validation_issues.extend(math_errors)
+
+        # Determine final result based on Automated Reasoning
+        guardrail_action = extracted_data.get("guardrail_action", "NONE")
+        if guardrail_action in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
+            final_result = ValidationResult.INVALID
         elif validation_issues:
             final_result = ValidationResult.INVALID
-        elif reasoning_result.get("result") == "VALID":
+        elif validation_passed:
             final_result = ValidationResult.VALID
         else:
             final_result = ValidationResult.SATISFIABLE
@@ -516,11 +659,7 @@ class TimecardPipeline:
                     if self.config
                     else "us.anthropic.claude-sonnet-4-20250514-v1:0"
                 ),
-                "validation_model": (
-                    self.config.bedrock_model_id
-                    if self.config
-                    else "us.anthropic.claude-sonnet-4-20250514-v1:0"
-                ),
+                "validation_model": validation_method,
             },
         )
 
@@ -531,32 +670,20 @@ class TimecardPipeline:
             "unique_days": unique_days,
             "average_daily_rate": average_daily_rate,
             "total_wage": total_wage,
-            "weekly_equivalent": weekly_equivalent,
-            "is_salary_exempt": is_salary_exempt,
             "pay_calculation": pay_calculation,
             "validation_issues": validation_issues,
-            "requires_human_review": requires_human_review,
-            "reasoning_confidence": reasoning_result.get("confidence", 0.0),
+            "requires_human_review": len(validation_issues) > 0,
+            "reasoning_confidence": extracted_data.get("validation_confidence", 0.0),
+            "reasoning_findings": validation_findings,
+            "automated_reasoning_result": guardrail_action,
+            "validation_method": validation_method,
+            "mathematical_consistency": mathematical_consistency,
             "model_info": model_info,
-            "compliance_summary": self._generate_compliance_summary(
-                unique_days,
-                average_daily_rate,
-                is_salary_exempt,
-                weekly_equivalent,
-                validation_issues,
-            ),
-            "next_actions": self._get_next_actions(final_result, validation_issues),
-            "federal_compliance": {
-                "minimum_wage_met": hourly_equivalent
-                >= self.compliance.federal_minimum_wage,
-                "daily_rate_compliant": average_daily_rate
-                >= (self.compliance.federal_minimum_wage * 8),
-                "days_within_limit": weekly_days <= 6,
-                "salary_exempt_threshold_met": (
-                    weekly_equivalent >= self.compliance.salary_exempt_threshold
-                    if is_salary_exempt
-                    else True
-                ),
+            "mathematical_validation": {
+                "sum_correct": self._check_sum_calculation(extracted_data),
+                "average_correct": self._check_average_calculation(extracted_data),
+                "count_correct": self._check_count_consistency(extracted_data),
+                "data_integrity": self._check_data_integrity(extracted_data),
             },
         }
 
@@ -583,231 +710,233 @@ class TimecardPipeline:
             "pay_type": "daily_rate",
         }
 
-    def _run_automated_reasoning_validation(
-        self,
-        extracted_data: Dict[str, Any],
-        weekly_salary: float,
-        is_salary_exempt: bool,
-    ) -> Dict[str, Any]:
-        """Run Automated Reasoning validation using Claude"""
 
-        # Extract variables from extracted_data
-        total_days = int(extracted_data.get("total_days") or 0)
-        average_daily_rate = float(extracted_data.get("average_daily_rate") or 0)
-        total_wage = float(extracted_data.get("total_wage") or 0)
-        weekly_equivalent = weekly_salary
 
-        validation_prompt = f"""
-        Validate this entertainment industry timecard for federal wage compliance (daily rate system):
-        
-        Employee: {extracted_data.get('employee_name', 'Unknown')}
-        Total Days: {total_days}
-        Average Daily Rate: ${average_daily_rate:.2f}/day
-        Total Wage: ${total_wage:.2f}
-        Weekly Equivalent: ${weekly_equivalent:.2f}
-        Is Salary Exempt: {is_salary_exempt}
-        
-        Federal Requirements:
-        - Minimum wage: ${self.compliance.federal_minimum_wage}/hour (${self.compliance.federal_minimum_wage * 8:.2f}/day)
-        - Overtime threshold: {self.compliance.overtime_threshold} hours/week
-        - Salary exempt threshold: ${self.compliance.salary_exempt_threshold}/week
-        - Maximum recommended hours: {self.compliance.max_weekly_hours} hours/week
-        
-        Return JSON with:
-        - result: "VALID" | "INVALID" | "SATISFIABLE"
-        - confidence: 0.0-1.0
-        - reasoning: "explanation"
-        - compliance_issues: ["list of issues"]
-        """
+    def _is_mathematically_consistent(self, extracted_data: Dict[str, Any]) -> bool:
+        """Check mathematical consistency of extracted timecard data"""
 
         try:
-            # Define the validation tool schema
-            validation_tool_schema = {
-                "name": "validate_timecard_compliance",
-                "description": "Validate timecard compliance with federal wage laws",
-                "inputSchema": {
-                    "json": {
-                        "$schema": "https://json-schema.org/draft/2020-12/schema",
-                        "type": "object",
-                        "properties": {
-                            "result": {
-                                "type": "string",
-                                "enum": ["VALID", "INVALID", "SATISFIABLE"],
-                                "description": "Validation result",
-                            },
-                            "confidence": {
-                                "type": "number",
-                                "minimum": 0.0,
-                                "maximum": 1.0,
-                                "description": "Confidence level in the validation",
-                            },
-                            "reasoning": {
-                                "type": "string",
-                                "description": "Detailed explanation of the validation decision",
-                            },
-                            "compliance_issues": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "List of compliance issues found",
-                            },
-                        },
-                        "required": [
-                            "result",
-                            "confidence",
-                            "reasoning",
-                            "compliance_issues",
-                        ],
-                    }
-                },
-            }
+            daily_entries = extracted_data.get("daily_entries", [])
+            total_wage = float(extracted_data.get("total_wage", 0))
+            average_daily_rate = float(extracted_data.get("average_daily_rate", 0))
+            employee_count = int(extracted_data.get("employee_count", 0))
+            total_days = int(extracted_data.get("total_days", 0))
 
-            # Get model ID from configuration
-            model_id = (
-                self.config.bedrock_model_id
-                if self.config
-                else "us.anthropic.claude-sonnet-4-20250514-v1:0"
+            # Check if daily entries exist
+            if not daily_entries:
+                return total_wage == 0 and average_daily_rate == 0 and total_days == 0
+
+            # Calculate actual values from daily entries
+            actual_sum = sum(
+                float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries
+            )
+            actual_avg = actual_sum / len(daily_entries) if daily_entries else 0
+            actual_unique_employees = len(
+                set(entry[0] for entry in daily_entries if len(entry) > 0)
             )
 
-            # Set max tokens for validation (smaller requirement)
-            max_tokens = min(1000, self._get_max_tokens_for_model(model_id))
+            # Check mathematical consistency (with small tolerance for floating point)
+            tolerance = 0.01
 
-            # Use Converse API with Tool Use for validation - with retry logic
-            response = self._call_bedrock_with_retry(
-                modelId=model_id,
-                messages=[{"role": "user", "content": [{"text": validation_prompt}]}],
-                toolConfig={"tools": [{"toolSpec": validation_tool_schema}]},
-                inferenceConfig={
-                    "maxTokens": max_tokens,
-                    "temperature": 0.1,
-                    "topP": 1,
-                },
-            )
+            # Sum validation
+            if abs(actual_sum - total_wage) > tolerance:
+                return False
 
-            # Extract tool use result
-            output_message = response["output"]["message"]
+            # Average validation
+            if abs(actual_avg - average_daily_rate) > tolerance:
+                return False
 
-            if "content" not in output_message:
-                raise Exception("No content in validation response")
+            # Count validation
+            if actual_unique_employees != employee_count:
+                return False
 
-            tool_use_content = None
-            for content_item in output_message["content"]:
-                if content_item.get("toolUse"):
-                    tool_use_content = content_item["toolUse"]["input"]
-                    break
+            # Length validation
+            if len(daily_entries) != total_days:
+                return False
 
-            if not tool_use_content:
-                # Fallback to text content
-                text_content = None
-                for content_item in output_message["content"]:
-                    if content_item.get("text"):
-                        text_content = content_item["text"].strip()
-                        break
+            # Check for negative values
+            if any(float(entry[2]) < 0 for entry in daily_entries if len(entry) > 2):
+                return False
 
-                if text_content:
-                    if text_content.startswith("```"):
-                        text_content = (
-                            text_content.replace("```json", "")
-                            .replace("```", "")
-                            .strip()
-                        )
-                    return json.loads(text_content)
-                else:
-                    raise Exception(
-                        "No tool use or text content found in validation response"
-                    )
+            # Check for empty critical fields
+            for entry in daily_entries:
+                if (
+                    len(entry) < 5
+                ):  # Should have [employee, date, rate, project, department]
+                    return False
+                if (
+                    not entry[0] or not entry[1] or not entry[3] or not entry[4]
+                ):  # Check non-empty strings
+                    return False
 
-            result = tool_use_content
-            result["model_info"] = {
-                "model_id": model_id,
-                "validation_model": model_id,
-                "max_tokens": max_tokens,
-            }
-            return result
+            return True
 
-        except Exception as e:
-            logger.error(f"Automated reasoning error: {e}")
-            return {
-                "result": "SATISFIABLE",
-                "confidence": 0.0,
-                "reasoning": f"Error in validation: {e}",
-                "compliance_issues": [],
-                "model_info": {
-                    "model_id": model_id,
-                    "validation_model": model_id,
-                    "error": str(e),
-                },
-            }
+        except (ValueError, TypeError, IndexError) as e:
+            logger.error(f"Error checking mathematical consistency: {e}")
+            return False
 
-    def _generate_compliance_summary(
+    def _check_sum_calculation(self, extracted_data: Dict[str, Any]) -> bool:
+        """Check if total wage equals sum of daily rates"""
+        try:
+            daily_entries = extracted_data.get("daily_entries", [])
+            total_wage = float(extracted_data.get("total_wage", 0))
+            
+            if not daily_entries:
+                return total_wage == 0
+            
+            actual_sum = sum(float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries)
+            return abs(actual_sum - total_wage) < 0.01
+            
+        except (ValueError, TypeError, IndexError):
+            return False
+
+    def _check_average_calculation(self, extracted_data: Dict[str, Any]) -> bool:
+        """Check if average daily rate is correctly calculated"""
+        try:
+            daily_entries = extracted_data.get("daily_entries", [])
+            average_daily_rate = float(extracted_data.get("average_daily_rate", 0))
+            total_wage = float(extracted_data.get("total_wage", 0))
+            
+            if not daily_entries:
+                return average_daily_rate == 0
+            
+            expected_avg = total_wage / len(daily_entries)
+            return abs(expected_avg - average_daily_rate) < 0.01
+            
+        except (ValueError, TypeError, ZeroDivisionError):
+            return False
+
+    def _check_count_consistency(self, extracted_data: Dict[str, Any]) -> bool:
+        """Check if employee count and timecard count are consistent"""
+        try:
+            daily_entries = extracted_data.get("daily_entries", [])
+            employee_count = int(extracted_data.get("employee_count", 0))
+            total_days = int(extracted_data.get("total_days", 0))
+            
+            if not daily_entries:
+                return employee_count == 0 and total_days == 0
+            
+            # Check employee count
+            actual_unique_employees = len(set(entry[0] for entry in daily_entries if len(entry) > 0))
+            if actual_unique_employees != employee_count:
+                return False
+            
+            # Check total timecard count
+            if len(daily_entries) != total_days:
+                return False
+            
+            return True
+            
+        except (ValueError, TypeError, IndexError):
+            return False
+
+    def _check_data_integrity(self, extracted_data: Dict[str, Any]) -> bool:
+        """Check data integrity (no negative values, missing fields, etc.)"""
+        try:
+            daily_entries = extracted_data.get("daily_entries", [])
+            
+            for entry in daily_entries:
+                # Check array structure
+                if len(entry) < 5:  # Should have [employee, date, rate, project, department]
+                    return False
+                
+                # Check for empty critical fields
+                if not entry[0] or not entry[1] or not entry[3] or not entry[4]:
+                    return False
+                
+                # Check for negative rates
+                if float(entry[2]) < 0:
+                    return False
+            
+            return True
+            
+        except (ValueError, TypeError, IndexError):
+            return False
+
+    def _get_mathematical_errors(self, extracted_data: Dict[str, Any]) -> List[str]:
+        """Get specific mathematical errors in the data"""
+        errors = []
+        
+        if not self._check_sum_calculation(extracted_data):
+            daily_entries = extracted_data.get("daily_entries", [])
+            total_wage = float(extracted_data.get("total_wage", 0))
+            actual_sum = sum(float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries)
+            errors.append(f"Sum calculation error: Total wage ({total_wage:.2f}) ≠ Sum of daily rates ({actual_sum:.2f})")
+        
+        if not self._check_average_calculation(extracted_data):
+            average_daily_rate = float(extracted_data.get("average_daily_rate", 0))
+            total_wage = float(extracted_data.get("total_wage", 0))
+            daily_entries = extracted_data.get("daily_entries", [])
+            expected_avg = total_wage / len(daily_entries) if daily_entries else 0
+            errors.append(f"Average calculation error: Reported ({average_daily_rate:.2f}) ≠ Calculated ({expected_avg:.2f})")
+        
+        if not self._check_count_consistency(extracted_data):
+            daily_entries = extracted_data.get("daily_entries", [])
+            employee_count = int(extracted_data.get("employee_count", 0))
+            total_days = int(extracted_data.get("total_days", 0))
+            actual_unique = len(set(entry[0] for entry in daily_entries if len(entry) > 0))
+            
+            if actual_unique != employee_count:
+                errors.append(f"Employee count mismatch: Reported ({employee_count}) ≠ Actual unique employees ({actual_unique})")
+            
+            if len(daily_entries) != total_days:
+                errors.append(f"Timecard count mismatch: Reported ({total_days}) ≠ Daily entries length ({len(daily_entries)})")
+        
+        if not self._check_data_integrity(extracted_data):
+            errors.append("Data integrity issues: negative values, missing fields, or invalid structure")
+        
+        return errors
+
+    def _fallback_validation(
         self,
-        days: int,
-        daily_rate: float,
-        is_exempt: bool,
+        average_daily_rate: float,
+        total_days: int,
         weekly_equivalent: float,
-        issues: List[str],
-    ) -> str:
-        """Generate human-readable compliance summary"""
-        if not issues:
-            if is_exempt:
-                return f"Compliant: Salary-exempt employee (${weekly_equivalent:.2f}/week equivalent)"
-            else:
-                weekly_days = days / 7 if days > 0 else 0
-                return f"Compliant: {days} days worked ({weekly_days:.1f} days/week) at ${daily_rate:.2f}/day"
-        else:
-            return f"Non-compliant: {len(issues)} issues found"
+        is_salary_exempt: bool,
+    ) -> Dict[str, Any]:
+        """Fallback validation when Automated Reasoning is not available - focuses on mathematical consistency"""
 
-    def _get_next_actions(
-        self, result: ValidationResult, issues: List[str]
-    ) -> List[str]:
-        """Get recommended next actions based on validation result"""
-        actions = []
+        validation_issues = []
 
-        if result == ValidationResult.REQUIRES_HUMAN_REVIEW:
-            actions.append("Route to HR manager for review")
-            actions.append("Verify job classification and duties")
+        # Get the extracted data for mathematical validation
+        # This is a simplified fallback that checks basic mathematical consistency
 
-        if result == ValidationResult.INVALID:
-            actions.append("Reject timecard - corrections needed")
-            actions.append("Notify employee and supervisor")
+        # Check for obviously invalid values
+        if average_daily_rate < 0:
+            validation_issues.append("Negative daily rate detected")
 
-        if "below federal minimum" in str(issues):
-            actions.append("Adjust hourly rate to meet federal minimum")
+        if total_days < 0:
+            validation_issues.append("Negative total days detected")
 
-        if "Excessive hours" in str(issues):
-            actions.append("Obtain management approval for overtime")
+        if total_days == 0 and average_daily_rate > 0:
+            validation_issues.append("Zero days worked but positive daily rate")
 
-        if not actions:
-            actions.append("Approve timecard for payroll processing")
+        if total_days > 0 and average_daily_rate == 0:
+            validation_issues.append("Days worked but zero daily rate")
 
-        return actions
-
-    def _add_to_review_queue(self, timecard_data: Dict[str, Any], issues: List[str]):
-        """Add timecard to human review queue"""
-        review_item = {
-            "id": f"review_{len(self.review_queue) + 1}",
-            "timecard": timecard_data,
-            "issues": issues,
-            "priority": self._calculate_priority(timecard_data),
-            "status": "pending",
-            "created_at": "now",
+        return {
+            "action": "BLOCK" if validation_issues else "NONE",
+            "findings": [
+                {
+                    "result": "INVALID" if validation_issues else "VALID",
+                    "rule_id": "fallback_mathematical_validation",
+                    "rule_description": "Basic mathematical consistency check",
+                    "variables": {
+                        "average_daily_rate": average_daily_rate,
+                        "total_days": total_days,
+                        "weekly_equivalent": weekly_equivalent,
+                    },
+                    "suggestions": validation_issues,
+                }
+            ],
+            "confidence": (
+                0.6 if not validation_issues else 0.2
+            ),  # Lower confidence for fallback
+            "outputs": [],
+            "raw_response": {"fallback": True, "type": "mathematical_validation"},
         }
-        self.review_queue.append(review_item)
-        logger.info(f"Added timecard to review queue: {review_item['id']}")
 
-    def _calculate_priority(self, timecard_data: Dict[str, Any]) -> str:
-        """Calculate review priority based on issues"""
-        days = timecard_data.get("total_days", 0)
-        daily_rate = timecard_data.get("average_daily_rate", 0)
-        hourly_equivalent = daily_rate / 8 if daily_rate > 0 else 0
 
-        if hourly_equivalent < self.compliance.federal_minimum_wage:
-            return "high"
-        elif days > 42:  # More than 6 days per week
-            return "high"
-        elif days > 35:  # More than 5 days per week
-            return "medium"
-        else:
-            return "low"
 
     def get_review_queue(self) -> List[Dict[str, Any]]:
         """Get pending reviews sorted by priority"""

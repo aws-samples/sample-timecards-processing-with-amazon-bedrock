@@ -86,26 +86,37 @@ function AppContent() {
     }
   ];
 
-  const breadcrumbs = [
-    { text: 'Timecard Processor', href: '/' },
-    { text: getBreadcrumbText(location.pathname), href: location.pathname }
-  ];
+  const breadcrumbs = getBreadcrumbs(location.pathname);
 
-  function getBreadcrumbText(href) {
+  function getBreadcrumbs(pathname) {
+    const baseBreadcrumb = { text: 'Timecard Processor', href: '/' };
+    
     const routes = {
-      '/dashboard': 'Dashboard',
-      '/upload': 'Upload Files',
-      '/jobs': 'Jobs',
-      '/review': 'Review Queue',
-      '/settings': 'Settings'
+      '/dashboard': [baseBreadcrumb, { text: 'Dashboard', href: '/dashboard' }],
+      '/upload': [baseBreadcrumb, { text: 'Upload Files', href: '/upload' }],
+      '/jobs': [baseBreadcrumb, { text: 'Jobs', href: '/jobs' }],
+      '/review': [baseBreadcrumb, { text: 'Review Queue', href: '/review' }],
+      '/settings': [baseBreadcrumb, { text: 'Settings', href: '/settings' }]
     };
 
     // Handle job details route
-    if (href.startsWith('/jobs/')) {
-      return 'Job Details';
+    if (pathname.startsWith('/jobs/')) {
+      return [
+        baseBreadcrumb,
+        { text: 'Jobs', href: '/jobs' },
+        { text: 'Job Details', href: pathname }
+      ];
     }
 
-    return routes[href] || 'Dashboard';
+    return routes[pathname] || [baseBreadcrumb, { text: 'Dashboard', href: '/dashboard' }];
+  }
+
+  function getActiveHref(pathname) {
+    // For job details pages, highlight the Jobs menu item
+    if (pathname.startsWith('/jobs/')) {
+      return '/jobs';
+    }
+    return pathname;
   }
 
   return (
@@ -193,7 +204,7 @@ function AppContent() {
           onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
           navigation={
             <SideNavigation
-              activeHref={location.pathname}
+              activeHref={getActiveHref(location.pathname)}
               onFollow={(event) => {
                 if (!event.detail.external) {
                   event.preventDefault();

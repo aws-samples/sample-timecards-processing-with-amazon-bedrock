@@ -521,3 +521,27 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"DatabaseManager.get_all_settings() failed: {e}")
             return {}
+
+    def update_multiple_settings(self, settings: Dict[str, Any]):
+        """Update multiple settings atomically"""
+        try:
+            with self.get_session() as session:
+                for key, value in settings.items():
+                    setting = (
+                        session.query(SettingsModel)
+                        .filter(SettingsModel.key == key)
+                        .first()
+                    )
+
+                    if setting:
+                        setting.value = value
+                        setting.updated_at = datetime.now(timezone.utc)
+                    else:
+                        setting = SettingsModel(key=key, value=value)
+                        session.add(setting)
+
+                session.commit()
+                logger.info(f"Updated {len(settings)} settings atomically")
+        except Exception as e:
+            logger.error(f"DatabaseManager.update_multiple_settings() failed: {e}")
+            raise

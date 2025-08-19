@@ -33,6 +33,7 @@ const ReviewQueue = ({ addNotification }) => {
   const [currentPageIndex, setCurrentPageIndex] = useState(1);
   const [errorCount, setErrorCount] = useState(0);
   const [hasError, setHasError] = useState(false);
+  const [completingReviews, setCompletingReviews] = useState(false);
 
   const fetchReviewQueue = useCallback(async () => {
     // Skip if we've had too many errors
@@ -133,6 +134,41 @@ const ReviewQueue = ({ addNotification }) => {
     return filtered.slice(startIndex, endIndex);
   };
 
+  const handleBulkCompleteReview = async () => {
+    if (selectedItems.length === 0) {
+      addNotification({
+        type: 'warning',
+        header: 'No items selected',
+        content: 'Please select items to complete review for'
+      });
+      return;
+    }
+
+    setCompletingReviews(true);
+    try {
+      const jobIds = selectedItems.map(item => item.job_id);
+      const result = await jobService.bulkCompleteReview(jobIds);
+      
+      addNotification({
+        type: 'success',
+        header: 'Reviews completed',
+        content: result.message
+      });
+
+      // Clear selection and refresh
+      setSelectedItems([]);
+      fetchReviewQueue();
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        header: 'Failed to complete reviews',
+        content: error.message
+      });
+    } finally {
+      setCompletingReviews(false);
+    }
+  };
+
   const columnDefinitions = [
     {
       id: 'employee',
@@ -195,7 +231,7 @@ const ReviewQueue = ({ addNotification }) => {
       header: 'Created',
       cell: item => formatTime(item.created_at),
       sortingField: 'created_at'
-    },
+    }
 
   ];
 
@@ -249,11 +285,18 @@ const ReviewQueue = ({ addNotification }) => {
         description="Items requiring human review due to validation issues"
         actions={
           <SpaceBetween direction="horizontal" size="xs">
+            {selectedItems.length > 0 && (
+              <Button
+                variant="primary"
+                onClick={handleBulkCompleteReview}
+                loading={completingReviews}
+                disabled={selectedItems.length === 0}
+              >
+                Complete {selectedItems.length} Review{selectedItems.length !== 1 ? 's' : ''}
+              </Button>
+            )}
             <Button onClick={fetchReviewQueue} loading={loading}>
               Refresh
-            </Button>
-            <Button variant="link" href="/jobs">
-              View All Jobs
             </Button>
           </SpaceBetween>
         }
@@ -313,6 +356,29 @@ const ReviewQueue = ({ addNotification }) => {
               }selected`;
           }
         }}
+        header={
+          selectedItems.length > 0 ? (
+            <Header
+              counter={`(${selectedItems.length} selected)`}
+              actions={
+                <SpaceBetween direction="horizontal" size="xs">
+                  <Button
+                    variant="primary"
+                    onClick={handleBulkCompleteReview}
+                    loading={completingReviews}
+                  >
+                    Complete Selected Reviews
+                  </Button>
+                  <Button onClick={() => setSelectedItems([])}>
+                    Clear Selection
+                  </Button>
+                </SpaceBetween>
+              }
+            >
+              Selected Items
+            </Header>
+          ) : undefined
+        }
         filter={
           <PropertyFilter
             query={filtering}

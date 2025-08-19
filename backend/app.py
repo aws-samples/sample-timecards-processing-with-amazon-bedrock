@@ -53,6 +53,74 @@ except Exception as e:
     # Create a fallback pipeline without config
     pipeline = TimecardPipeline()
 
+# Initialize Automated Reasoning (non-blocking, only if not configured)
+def init_automated_reasoning():
+    """Initialize Automated Reasoning in background thread"""
+    try:
+        from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+        
+        provisioner = AutomatedReasoningProvisioner(
+            region_name=config_manager.aws_region,
+            config_manager=config_manager
+        )
+        
+        current_status = config_manager.get('automated_reasoning_status', 'not_configured')
+        logger.info(f"Automated Reasoning initialization - current status: {current_status}")
+        
+        if current_status == 'not_configured':
+            logger.info("Starting initial Automated Reasoning setup...")
+            provisioner.ensure_provisioned()
+        elif current_status == 'creating':
+            logger.info("Automated Reasoning creation in progress, checking if completed...")
+            # Check if creation is actually completed but DB wasn't updated
+            policy_arn = config_manager.get('automated_reasoning_policy_arn')
+            build_workflow_id = config_manager.get('automated_reasoning_build_workflow_id')
+            
+            if policy_arn and build_workflow_id:
+                try:
+                    # Check if build workflow is completed
+                    result = provisioner._check_creation_progress(policy_arn, build_workflow_id)
+                    new_status = result.get('status', 'creating')
+                    logger.info(f"Creation progress check result: {new_status}")
+                    
+                    if new_status == 'ready':
+                        logger.info("Creation was completed, DB updated to ready")
+                    elif new_status == 'failed':
+                        logger.warning("Creation failed, will need manual retry")
+                    else:
+                        logger.info("Creation still in progress")
+                except Exception as e:
+                    logger.error(f"Failed to check creation progress during init: {e}")
+            else:
+                logger.warning("Creating status but missing policy ARN or build workflow ID")
+        elif current_status == 'ready':
+            logger.info("Automated Reasoning already ready")
+            # Verify resources still exist, but don't recreate automatically
+            try:
+                policy_arn = config_manager.get('automated_reasoning_policy_arn')
+                guardrail_id = config_manager.get('automated_reasoning_guardrail_id')
+                
+                if policy_arn and guardrail_id:
+                    policy_exists, guardrail_exists = provisioner._check_existing_resources()
+                    if policy_exists and guardrail_exists:
+                        logger.info("Automated Reasoning resources verified and ready")
+                    else:
+                        logger.warning("Some resources missing, but keeping ready status (manual intervention may be needed)")
+                else:
+                    logger.warning("Missing policy ARN or guardrail ID in ready state")
+            except Exception as e:
+                logger.error(f"Failed to verify existing resources: {e}")
+        else:
+            logger.info(f"Automated Reasoning in {current_status} state, no action needed")
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize Automated Reasoning: {e}")
+
+# Start Automated Reasoning initialization in background thread
+import threading
+ar_init_thread = threading.Thread(target=init_automated_reasoning, daemon=True)
+ar_init_thread.start()
+
 # Background job processor
 def job_processor():
     """Background thread to process jobs"""
@@ -155,11 +223,22 @@ def health_check():
         # Test if we're using PostgreSQL or SQLite
         db_type = "postgresql" if db_manager.use_postgres else "sqlite"
         
+        # Get Automated Reasoning status
+        ar_status = config_manager.get('automated_reasoning_status', 'not_configured')
+        ar_guardrail_id = config_manager.get('automated_reasoning_guardrail_id')
+        
+        validation_method = "automated_reasoning" if ar_status == 'ready' and ar_guardrail_id else "fallback"
+        
         return jsonify({
             "status": "healthy", 
             "service": "timecard-processor",
             "database": db_type,
-            "queue_stats": stats
+            "queue_stats": stats,
+            "automated_reasoning": {
+                "status": ar_status,
+                "validation_method": validation_method,
+                "guardrail_active": bool(ar_guardrail_id and ar_status == 'ready')
+            }
         })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -558,6 +637,82 @@ def complete_review(job_id):
         }), 500
 
 
+@app.route("/api/jobs/bulk-complete-review", methods=["POST"])
+def bulk_complete_review():
+    """Mark multiple jobs' reviews as completed"""
+    try:
+        data = request.get_json()
+        if not data or 'job_ids' not in data:
+            return jsonify({"error": "job_ids is required"}), 400
+        
+        job_ids = data['job_ids']
+        if not isinstance(job_ids, list) or len(job_ids) == 0:
+            return jsonify({"error": "job_ids must be a non-empty array"}), 400
+        
+        completed_count = 0
+        errors = []
+        
+        for job_id in job_ids:
+            try:
+                job = job_queue.get_job(job_id)
+                if not job:
+                    errors.append(f"Job {job_id} not found")
+                    continue
+                
+                if not (job.result and 
+                        isinstance(job.result, dict) and 
+                        job.result.get('validation', {}).get('requires_human_review')):
+                    errors.append(f"Job {job_id} does not require human review")
+                    continue
+                
+                # Update the job result to mark review as completed
+                updated_result = job.result.copy()
+                if 'validation' not in updated_result:
+                    updated_result['validation'] = {}
+                
+                updated_result['validation']['review_completed'] = True
+                updated_result['validation']['review_completed_at'] = datetime.now(timezone.utc).isoformat()
+                updated_result['validation']['validation_result'] = 'REVIEWED'
+                
+                # Update job in database
+                job_queue.update_job_status(
+                    job_id, 
+                    JobStatus.COMPLETED, 
+                    result=updated_result
+                )
+                
+                completed_count += 1
+                logger.info(f"Review completed for job {job_id}")
+                
+            except Exception as e:
+                errors.append(f"Error completing review for job {job_id}: {str(e)}")
+        
+        response = {
+            "status": "success",
+            "completed_count": completed_count,
+            "total_requested": len(job_ids)
+        }
+        
+        if errors:
+            response["errors"] = errors
+            response["message"] = f"Completed {completed_count} of {len(job_ids)} reviews with {len(errors)} errors"
+        else:
+            response["message"] = f"Successfully completed {completed_count} reviews"
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        import traceback
+        logger.error(f"API /api/jobs/bulk-complete-review failed: {e}")
+        logger.error(f"Function: bulk_complete_review()")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return jsonify({
+            "error": str(e),
+            "function": "bulk_complete_review",
+            "endpoint": "/api/jobs/bulk-complete-review"
+        }), 500
+
+
 @app.route("/api/queue/cleanup", methods=["POST"])
 def cleanup_queue():
     """Clean up old completed jobs"""
@@ -582,10 +737,42 @@ def get_settings():
     try:
         settings = config_manager.get_all()
         
+        # Get automated reasoning status without triggering provisioning
+        try:
+            from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+            
+            provisioner = AutomatedReasoningProvisioner(
+                region_name=config_manager.aws_region,
+                config_manager=config_manager
+            )
+            
+            # Only get current status, don't trigger provisioning
+            ar_result = provisioner._get_current_status_with_smart_check()
+            
+            automated_reasoning_status = {
+                "status": ar_result.get("status", "unknown"),
+                "policy_arn": ar_result.get("policy_arn"),
+                "guardrail_id": ar_result.get("guardrail_id"),
+                "guardrail_version": ar_result.get("guardrail_version"),
+                "message": ar_result.get("message", ""),
+                "build_status": ar_result.get("build_status"),
+                "created": ar_result.get("created", False),
+                "error": ar_result.get("error"),
+                "validation_method": "automated_reasoning" if ar_result.get("status") == "ready" and ar_result.get("guardrail_id") else "fallback"
+            }
+        except Exception as e:
+            logger.error(f"Failed to get automated reasoning status: {e}")
+            automated_reasoning_status = {
+                "status": "error",
+                "error": str(e),
+                "validation_method": "fallback"
+            }
+        
         # Add system information
         settings.update({
             'system_info': config_manager.get_system_info(),
-            'aws_config_status': config_manager.validate_aws_config()
+            'aws_config_status': config_manager.validate_aws_config(),
+            'automated_reasoning_status': automated_reasoning_status
         })
         
         return jsonify(settings)
@@ -593,6 +780,123 @@ def get_settings():
     except Exception as e:
         logger.error(f"Failed to get settings: {e}")
         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/automated-reasoning/status", methods=["GET"])
+def get_automated_reasoning_status():
+    """Get current Automated Reasoning status"""
+    try:
+        from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+        
+        provisioner = AutomatedReasoningProvisioner(
+            region_name=config_manager.aws_region,
+            config_manager=config_manager
+        )
+        
+        # Non-blocking status check
+        result = provisioner.ensure_provisioned()
+        
+        return jsonify({
+            "status": result.get("status", "unknown"),
+            "policy_arn": result.get("policy_arn"),
+            "guardrail_id": result.get("guardrail_id"),
+            "guardrail_version": result.get("guardrail_version"),
+            "message": result.get("message", ""),
+            "build_status": result.get("build_status"),
+            "created": result.get("created", False),
+            "error": result.get("error"),
+            "last_check": config_manager.get('automated_reasoning_last_check'),
+            "created_at": config_manager.get('automated_reasoning_created_at')
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get Automated Reasoning status: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+@app.route("/api/automated-reasoning/check-progress", methods=["POST"])
+def check_automated_reasoning_progress():
+    """Check Automated Reasoning setup progress (rate limited)"""
+    try:
+        from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+        
+        provisioner = AutomatedReasoningProvisioner(
+            region_name=config_manager.aws_region,
+            config_manager=config_manager
+        )
+        
+        current_status = config_manager.get('automated_reasoning_status', 'not_configured')
+        
+        if current_status != 'creating':
+            return jsonify({
+                "status": "success",
+                "message": f"Status is {current_status}, no progress to check",
+                "result": provisioner._get_current_status()
+            })
+        
+        # Check if enough time has passed since last check
+        last_check = config_manager.get('automated_reasoning_last_check', 0)
+        now = time.time()
+        
+        if (now - last_check) < 10:  # Rate limit to once per 10 seconds
+            return jsonify({
+                "status": "rate_limited",
+                "message": f"Please wait {10 - (now - last_check):.1f} seconds before checking again",
+                "result": provisioner._get_current_status()
+            })
+        
+        # Actually check progress
+        policy_arn = config_manager.get('automated_reasoning_policy_arn')
+        build_workflow_id = config_manager.get('automated_reasoning_build_workflow_id')
+        
+        if policy_arn and build_workflow_id:
+            result = provisioner._check_creation_progress(policy_arn, build_workflow_id)
+            return jsonify({
+                "status": "success",
+                "message": "Progress checked",
+                "result": result
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Missing policy ARN or build workflow ID",
+                "result": provisioner._get_current_status()
+            })
+        
+    except Exception as e:
+        logger.error(f"Failed to check Automated Reasoning progress: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+@app.route("/api/automated-reasoning/retry", methods=["POST"])
+def retry_automated_reasoning():
+    """Retry Automated Reasoning setup"""
+    try:
+        from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+        
+        provisioner = AutomatedReasoningProvisioner(
+            region_name=config_manager.aws_region,
+            config_manager=config_manager
+        )
+        
+        # Force recreation
+        result = provisioner.ensure_provisioned(force_recreate=True)
+        
+        return jsonify({
+            "status": "success",
+            "message": "Automated Reasoning setup retry initiated",
+            "result": result
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to retry Automated Reasoning setup: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
 
 
 @app.route("/api/settings", methods=["POST"])
