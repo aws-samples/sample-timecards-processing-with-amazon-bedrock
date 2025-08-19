@@ -177,6 +177,23 @@ const Settings = ({ addNotification }) => {
     }
   };
 
+  const maskArn = (arn) => {
+    if (!arn) return 'Not Set';
+    
+    // Extract the last part after the last slash or colon
+    const parts = arn.split(/[/:]/);
+    const lastPart = parts[parts.length - 1];
+    
+    // Show first 8 and last 4 characters with asterisks in between
+    if (lastPart.length > 12) {
+      return `${lastPart.substring(0, 8)}****${lastPart.substring(lastPart.length - 4)}`;
+    } else if (lastPart.length > 8) {
+      return `${lastPart.substring(0, 4)}****${lastPart.substring(lastPart.length - 2)}`;
+    } else {
+      return `${lastPart.substring(0, 2)}****`;
+    }
+  };
+
   const handleCleanup = async () => {
     try {
       const result = await jobService.cleanupQueue(settings.cleanupDays);
@@ -420,8 +437,8 @@ const Settings = ({ addNotification }) => {
               <Box variant="h4">Automated Reasoning Status</Box>
               <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
                 <li>Status: {getAutomatedReasoningStatusDisplay(automatedReasoningStatus.status)}</li>
-                <li>Policy ARN: {automatedReasoningStatus.policy_arn ? 'Configured' : 'Not Set'}</li>
-                <li>Guardrail ID: {automatedReasoningStatus.guardrail_id ? 'Configured' : 'Not Set'}</li>
+                <li>Policy ARN: {maskArn(automatedReasoningStatus.policy_arn)}</li>
+                <li>Guardrail ID: {maskArn(automatedReasoningStatus.guardrail_id)}</li>
                 <li>Validation Method: {automatedReasoningStatus.validation_method || 'Fallback'}</li>
               </ul>
             </Box>

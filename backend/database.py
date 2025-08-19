@@ -390,9 +390,12 @@ class DatabaseManager:
                     for started_at, completed_at in completed_jobs_with_times:
                         if started_at and completed_at and completed_at > started_at:
                             duration = (completed_at - started_at).total_seconds()
-                            if duration > 0:  # Only count positive durations
+                            # Filter out unreasonably long durations (more than 1 hour)
+                            if 0 < duration <= 3600:  # Only count durations between 0 and 1 hour
                                 total_time += duration
                                 valid_jobs += 1
+                            elif duration > 3600:
+                                logger.warning(f"Excluding abnormally long job duration: {duration}s")
 
                     avg_time = total_time / valid_jobs if valid_jobs > 0 else 0
                 else:

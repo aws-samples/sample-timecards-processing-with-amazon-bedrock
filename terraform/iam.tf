@@ -80,6 +80,29 @@ resource "aws_iam_role_policy" "ecs_task" {
           aws_s3_bucket.app_data.arn,
           "${aws_s3_bucket.app_data.arn}/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:CreateAutomatedReasoningPolicy",
+          "bedrock:GetAutomatedReasoningPolicy",
+          "bedrock:ListAutomatedReasoningPolicies",
+          "bedrock:ExportAutomatedReasoningPolicyVersion",
+          "bedrock:StartAutomatedReasoningPolicyBuildWorkflow",
+          "bedrock:GetAutomatedReasoningPolicyBuildWorkflow",
+          "bedrock:InvokeAutomatedReasoningPolicy"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:CreateGuardrail",
+          "bedrock:GetGuardrail",
+          "bedrock:ListGuardrails",
+          "bedrock:ApplyGuardrail"
+        ]
+        Resource = "*"
       }
     ]
   })

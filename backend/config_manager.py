@@ -141,7 +141,6 @@ class ConfigManager:
     @property
     def bedrock_model_id(self) -> str:
         model_id = self.get('bedrock_model_id', 'us.anthropic.claude-sonnet-4-20250514-v1:0')
-        logger.info(f"Config manager returning bedrock_model_id: {model_id}")
         return model_id
 
     @property

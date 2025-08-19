@@ -57,7 +57,7 @@ class TimecardPipeline:
         self.guardrails = boto3.client(
             "bedrock", region_name=region, config=boto_config
         )
-        
+
         # Auto-provision Automated Reasoning if needed
         self._ensure_automated_reasoning_ready()
 
@@ -78,19 +78,19 @@ class TimecardPipeline:
         """Ensure Automated Reasoning is provisioned (non-blocking)"""
         try:
             from automated_reasoning_provisioner import auto_provision_if_needed
-            
+
             logger.info("Checking Automated Reasoning configuration...")
-            
+
             # Non-blocking check/provision
             result = auto_provision_if_needed(
                 config_manager=self.config,
-                region_name=self.config.aws_region if self.config else "us-west-2"
+                region_name=self.config.aws_region if self.config else "us-west-2",
             )
-            
+
             status = result.get("status", "unknown")
             policy_arn = result.get("policy_arn")
             guardrail_id = result.get("guardrail_id")
-            
+
             if status == "ready":
                 logger.info("Automated Reasoning is READY")
                 logger.info(f"   Policy ARN: {policy_arn}")
@@ -99,7 +99,9 @@ class TimecardPipeline:
             elif status == "creating":
                 logger.info("Automated Reasoning setup IN PROGRESS")
                 logger.info(f"   Policy ARN: {policy_arn}")
-                logger.info(f"   Status: {result.get('message', 'Creation in progress')}")
+                logger.info(
+                    f"   Status: {result.get('message', 'Creation in progress')}"
+                )
                 logger.info("   Using fallback validation until ready")
             elif status == "failed":
                 logger.warning("Automated Reasoning setup FAILED")
@@ -108,7 +110,7 @@ class TimecardPipeline:
             else:
                 logger.info(f"Automated Reasoning status: {status}")
                 logger.info("   Using fallback mathematical validation")
-            
+
         except Exception as e:
             logger.warning(f"Failed to check Automated Reasoning: {e}")
             logger.info("   Using fallback mathematical validation")
@@ -119,31 +121,33 @@ class TimecardPipeline:
             if not self.config:
                 logger.debug("No config manager available")
                 return None
-            
+
             guardrail_id = self.config.automated_reasoning_guardrail_id
             guardrail_version = self.config.automated_reasoning_guardrail_version
-            ar_status = self.config.get('automated_reasoning_status', 'unknown')
-            
+            ar_status = self.config.get("automated_reasoning_status", "unknown")
+
             logger.debug(f"Guardrail config check:")
             logger.debug(f"   Status: {ar_status}")
             logger.debug(f"   Guardrail ID: {guardrail_id or 'None'}")
             logger.debug(f"   Version: {guardrail_version}")
-            
-            if guardrail_id and ar_status == 'ready':
+
+            if guardrail_id and ar_status == "ready":
                 config = {
                     "guardrailIdentifier": guardrail_id,
                     "guardrailVersion": guardrail_version,
-                    "trace": "enabled"  # Enable tracing for debugging
+                    "trace": "enabled",  # Enable tracing for debugging
                 }
                 logger.debug(f"Returning guardrail config: {guardrail_id}")
                 return config
-            elif guardrail_id and ar_status == 'creating':
-                logger.debug(f"Guardrail exists but status is 'creating', not using yet")
+            elif guardrail_id and ar_status == "creating":
+                logger.debug(
+                    f"Guardrail exists but status is 'creating', not using yet"
+                )
                 return None
             else:
                 logger.debug(f"No guardrail available (status: {ar_status})")
                 return None
-            
+
         except Exception as e:
             logger.warning(f"Failed to get guardrail config: {e}")
             return None
@@ -350,7 +354,7 @@ class TimecardPipeline:
 
             # Get guardrail configuration for mathematical validation
             guardrail_config = self._get_guardrail_config()
-            
+
             # Use Converse API with Tool Use and Guardrail - with retry logic
             converse_params = {
                 "modelId": model_id,
@@ -362,73 +366,102 @@ class TimecardPipeline:
                     "topP": 1,
                 },
             }
-            
+
             # Add guardrail configuration if available
             if guardrail_config:
                 converse_params["guardrailConfig"] = guardrail_config
                 guardrail_id = guardrail_config.get("guardrailIdentifier", "unknown")
                 logger.info(f"Using Automated Reasoning Guardrail: {guardrail_id}")
-                logger.info(f"   Policy ARN: {self.config.automated_reasoning_policy_arn if self.config else 'unknown'}")
+                logger.info(
+                    f"   Policy ARN: {self.config.automated_reasoning_policy_arn if self.config else 'unknown'}"
+                )
             else:
-                ar_status = self.config.get('automated_reasoning_status', 'unknown') if self.config else 'unknown'
+                ar_status = (
+                    self.config.get("automated_reasoning_status", "unknown")
+                    if self.config
+                    else "unknown"
+                )
                 logger.info(f"Automated Reasoning NOT active (status: {ar_status})")
                 logger.info("   Using fallback mathematical validation")
-            
+
             response = self._call_bedrock_with_retry(**converse_params)
 
             # Extract tool use result and guardrail information
             output_message = response["output"]["message"]
-            
+
             # Check for guardrail intervention
             guardrail_action = "NONE"
             guardrail_findings = []
             validation_passed = True
             validation_confidence = 1.0
-            
+
             if "trace" in response and "guardrail" in response["trace"]:
                 guardrail_trace = response["trace"]["guardrail"]
                 guardrail_action = guardrail_trace.get("action", "NONE")
-                
+
                 logger.info(f"Automated Reasoning Guardrail Response:")
                 logger.info(f"   Action: {guardrail_action}")
-                
+
                 # Extract Automated Reasoning findings if available
                 if "modelOutput" in guardrail_trace:
                     model_output = guardrail_trace["modelOutput"]
-                    if "assessments" in model_output and "automatedReasoning" in model_output["assessments"]:
-                        ar_assessment = model_output["assessments"]["automatedReasoning"]
+                    if (
+                        "assessments" in model_output
+                        and "automatedReasoning" in model_output["assessments"]
+                    ):
+                        ar_assessment = model_output["assessments"][
+                            "automatedReasoning"
+                        ]
                         guardrail_findings = ar_assessment.get("findings", [])
-                        
-                        logger.info(f"   Automated Reasoning Findings: {len(guardrail_findings)} findings")
+
+                        logger.info(
+                            f"   Automated Reasoning Findings: {len(guardrail_findings)} findings"
+                        )
                         for i, finding in enumerate(guardrail_findings):
                             result = finding.get("result", "UNKNOWN")
                             rule_desc = finding.get("ruleDescription", "No description")
                             logger.info(f"     Finding {i+1}: {result} - {rule_desc}")
-                        
+
                         # Check if validation passed
                         if guardrail_action in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
                             validation_passed = False
                             validation_confidence = 0.3
-                            logger.info(f"   Validation FAILED: Guardrail {guardrail_action}")
-                        elif any(f.get("result") == "INVALID" for f in guardrail_findings):
+                            logger.info(
+                                f"   Validation FAILED: Guardrail {guardrail_action}"
+                            )
+                        elif any(
+                            f.get("result") == "INVALID" for f in guardrail_findings
+                        ):
                             validation_passed = False
                             validation_confidence = 0.5
-                            logger.info(f"   Validation FAILED: Invalid findings detected")
-                        elif any(f.get("result") == "SATISFIABLE" for f in guardrail_findings):
+                            logger.info(
+                                f"   Validation FAILED: Invalid findings detected"
+                            )
+                        elif any(
+                            f.get("result") == "SATISFIABLE" for f in guardrail_findings
+                        ):
                             validation_confidence = 0.7
                             logger.info(f"   Validation PARTIAL: Satisfiable findings")
                         else:
                             logger.info(f"   Validation PASSED: All checks successful")
                     else:
-                        logger.info(f"   No Automated Reasoning assessments found in trace")
+                        logger.info(
+                            f"   No Automated Reasoning assessments found in trace"
+                        )
                 else:
                     logger.info(f"   No model output found in guardrail trace")
             else:
                 if guardrail_config:
-                    logger.warning(f"Guardrail configured but no trace found in response")
-                    logger.warning(f"   This may indicate the guardrail is not properly attached")
+                    logger.warning(
+                        f"Guardrail configured but no trace found in response"
+                    )
+                    logger.warning(
+                        f"   This may indicate the guardrail is not properly attached"
+                    )
                 else:
-                    logger.info(f"No guardrail trace (expected - no guardrail configured)")
+                    logger.info(
+                        f"No guardrail trace (expected - no guardrail configured)"
+                    )
 
             if "content" not in output_message:
                 raise Exception("No content in response")
@@ -461,21 +494,27 @@ class TimecardPipeline:
             else:
                 extracted = tool_use_content
 
-            extracted["extraction_method"] = "tool_use_with_guardrail" if guardrail_action != "NONE" else "tool_use"
+            extracted["extraction_method"] = (
+                "tool_use_with_guardrail" if guardrail_action != "NONE" else "tool_use"
+            )
             extracted["model_info"] = {
                 "model_id": model_id,
                 "extraction_model": model_id,
                 "max_tokens": max_tokens,
                 "guardrail_applied": guardrail_action != "NONE",
             }
-            
+
             # Add validation results from guardrail
             extracted["validation_passed"] = validation_passed
-            extracted["validation_method"] = "automated_reasoning" if guardrail_findings else "none"
+            extracted["validation_method"] = (
+                "automated_reasoning" if guardrail_findings else "none"
+            )
             extracted["validation_findings"] = guardrail_findings
             extracted["validation_confidence"] = validation_confidence
             extracted["guardrail_action"] = guardrail_action
-            extracted["mathematical_consistency"] = self._is_mathematically_consistent(extracted)
+            extracted["mathematical_consistency"] = self._is_mathematically_consistent(
+                extracted
+            )
 
             # Post-process and validate the extracted data
             extracted = self._post_process_extracted_data(extracted)
@@ -577,8 +616,6 @@ class TimecardPipeline:
 
         return extracted
 
-
-
     def step3_automated_reasoning(
         self, extracted_data: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -597,10 +634,12 @@ class TimecardPipeline:
         validation_findings = extracted_data.get("validation_findings", [])
         mathematical_consistency = extracted_data.get("mathematical_consistency", True)
         guardrail_action = extracted_data.get("guardrail_action", "NONE")
-        
+
         # Log validation method used
         if validation_method == "automated_reasoning":
-            policy_arn = self.config.automated_reasoning_policy_arn if self.config else "unknown"
+            policy_arn = (
+                self.config.automated_reasoning_policy_arn if self.config else "unknown"
+            )
             logger.info(f"Step3: Processing Automated Reasoning results")
             logger.info(f"   Policy ARN: {policy_arn}")
             logger.info(f"   Guardrail Action: {guardrail_action}")
@@ -610,8 +649,6 @@ class TimecardPipeline:
             logger.info(f"Step3: Using fallback mathematical validation")
             logger.info(f"   Method: {validation_method}")
             logger.info(f"   Mathematical Consistency: {mathematical_consistency}")
-
-
 
         # Calculate pay (for daily rate system, pay equals total wage)
         pay_calculation = {
@@ -629,10 +666,14 @@ class TimecardPipeline:
             if validation_method == "automated_reasoning":
                 for finding in validation_findings:
                     if finding.get("result") == "INVALID":
-                        rule_desc = finding.get("ruleDescription", "Mathematical validation failed")
+                        rule_desc = finding.get(
+                            "ruleDescription", "Mathematical validation failed"
+                        )
                         validation_issues.append(f"Data integrity issue: {rule_desc}")
             elif not mathematical_consistency:
-                validation_issues.append("Mathematical inconsistencies detected in timecard data")
+                validation_issues.append(
+                    "Mathematical inconsistencies detected in timecard data"
+                )
 
         # If no Automated Reasoning, fall back to basic mathematical check
         if validation_method == "none" and not mathematical_consistency:
@@ -710,8 +751,6 @@ class TimecardPipeline:
             "pay_type": "daily_rate",
         }
 
-
-
     def _is_mathematically_consistent(self, extracted_data: Dict[str, Any]) -> bool:
         """Check mathematical consistency of extracted timecard data"""
 
@@ -780,13 +819,15 @@ class TimecardPipeline:
         try:
             daily_entries = extracted_data.get("daily_entries", [])
             total_wage = float(extracted_data.get("total_wage", 0))
-            
+
             if not daily_entries:
                 return total_wage == 0
-            
-            actual_sum = sum(float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries)
+
+            actual_sum = sum(
+                float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries
+            )
             return abs(actual_sum - total_wage) < 0.01
-            
+
         except (ValueError, TypeError, IndexError):
             return False
 
@@ -796,13 +837,13 @@ class TimecardPipeline:
             daily_entries = extracted_data.get("daily_entries", [])
             average_daily_rate = float(extracted_data.get("average_daily_rate", 0))
             total_wage = float(extracted_data.get("total_wage", 0))
-            
+
             if not daily_entries:
                 return average_daily_rate == 0
-            
+
             expected_avg = total_wage / len(daily_entries)
             return abs(expected_avg - average_daily_rate) < 0.01
-            
+
         except (ValueError, TypeError, ZeroDivisionError):
             return False
 
@@ -812,21 +853,23 @@ class TimecardPipeline:
             daily_entries = extracted_data.get("daily_entries", [])
             employee_count = int(extracted_data.get("employee_count", 0))
             total_days = int(extracted_data.get("total_days", 0))
-            
+
             if not daily_entries:
                 return employee_count == 0 and total_days == 0
-            
+
             # Check employee count
-            actual_unique_employees = len(set(entry[0] for entry in daily_entries if len(entry) > 0))
+            actual_unique_employees = len(
+                set(entry[0] for entry in daily_entries if len(entry) > 0)
+            )
             if actual_unique_employees != employee_count:
                 return False
-            
+
             # Check total timecard count
             if len(daily_entries) != total_days:
                 return False
-            
+
             return True
-            
+
         except (ValueError, TypeError, IndexError):
             return False
 
@@ -834,57 +877,73 @@ class TimecardPipeline:
         """Check data integrity (no negative values, missing fields, etc.)"""
         try:
             daily_entries = extracted_data.get("daily_entries", [])
-            
+
             for entry in daily_entries:
                 # Check array structure
-                if len(entry) < 5:  # Should have [employee, date, rate, project, department]
+                if (
+                    len(entry) < 5
+                ):  # Should have [employee, date, rate, project, department]
                     return False
-                
+
                 # Check for empty critical fields
                 if not entry[0] or not entry[1] or not entry[3] or not entry[4]:
                     return False
-                
+
                 # Check for negative rates
                 if float(entry[2]) < 0:
                     return False
-            
+
             return True
-            
+
         except (ValueError, TypeError, IndexError):
             return False
 
     def _get_mathematical_errors(self, extracted_data: Dict[str, Any]) -> List[str]:
         """Get specific mathematical errors in the data"""
         errors = []
-        
+
         if not self._check_sum_calculation(extracted_data):
             daily_entries = extracted_data.get("daily_entries", [])
             total_wage = float(extracted_data.get("total_wage", 0))
-            actual_sum = sum(float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries)
-            errors.append(f"Sum calculation error: Total wage ({total_wage:.2f}) ≠ Sum of daily rates ({actual_sum:.2f})")
-        
+            actual_sum = sum(
+                float(entry[2]) if len(entry) > 2 else 0 for entry in daily_entries
+            )
+            errors.append(
+                f"Sum calculation error: Total wage ({total_wage:.2f}) ≠ Sum of daily rates ({actual_sum:.2f})"
+            )
+
         if not self._check_average_calculation(extracted_data):
             average_daily_rate = float(extracted_data.get("average_daily_rate", 0))
             total_wage = float(extracted_data.get("total_wage", 0))
             daily_entries = extracted_data.get("daily_entries", [])
             expected_avg = total_wage / len(daily_entries) if daily_entries else 0
-            errors.append(f"Average calculation error: Reported ({average_daily_rate:.2f}) ≠ Calculated ({expected_avg:.2f})")
-        
+            errors.append(
+                f"Average calculation error: Reported ({average_daily_rate:.2f}) ≠ Calculated ({expected_avg:.2f})"
+            )
+
         if not self._check_count_consistency(extracted_data):
             daily_entries = extracted_data.get("daily_entries", [])
             employee_count = int(extracted_data.get("employee_count", 0))
             total_days = int(extracted_data.get("total_days", 0))
-            actual_unique = len(set(entry[0] for entry in daily_entries if len(entry) > 0))
-            
+            actual_unique = len(
+                set(entry[0] for entry in daily_entries if len(entry) > 0)
+            )
+
             if actual_unique != employee_count:
-                errors.append(f"Employee count mismatch: Reported ({employee_count}) ≠ Actual unique employees ({actual_unique})")
-            
+                errors.append(
+                    f"Employee count mismatch: Reported ({employee_count}) ≠ Actual unique employees ({actual_unique})"
+                )
+
             if len(daily_entries) != total_days:
-                errors.append(f"Timecard count mismatch: Reported ({total_days}) ≠ Daily entries length ({len(daily_entries)})")
-        
+                errors.append(
+                    f"Timecard count mismatch: Reported ({total_days}) ≠ Daily entries length ({len(daily_entries)})"
+                )
+
         if not self._check_data_integrity(extracted_data):
-            errors.append("Data integrity issues: negative values, missing fields, or invalid structure")
-        
+            errors.append(
+                "Data integrity issues: negative values, missing fields, or invalid structure"
+            )
+
         return errors
 
     def _fallback_validation(
@@ -935,8 +994,6 @@ class TimecardPipeline:
             "outputs": [],
             "raw_response": {"fallback": True, "type": "mathematical_validation"},
         }
-
-
 
     def get_review_queue(self) -> List[Dict[str, Any]]:
         """Get pending reviews sorted by priority"""
@@ -1025,11 +1082,11 @@ class TimecardPipeline:
             # Claude Opus 4.1 has a 32K token limit
             "us.anthropic.claude-opus-4-1-20250805-v1:0": 32000,
             # Claude Sonnet 4 has higher limits
-            "us.anthropic.claude-sonnet-4-20250514-v1:0": 64000,
+            "us.anthropic.claude-sonnet-4-20250514-v1:0": 32000,
             # Claude 3.7 Sonnet has higher limits
-            "us.anthropic.claude-3-7-sonnet-20250219-v1:0": 64000,
+            "us.anthropic.claude-3-7-sonnet-20250219-v1:0": 32000,
             # Legacy models (fallback)
-            "anthropic.claude-3-sonnet-20240229-v1:0": 64000,
+            "anthropic.claude-3-sonnet-20240229-v1:0": 16000,
         }
 
         # Return model-specific limit or default to 32000 for safety

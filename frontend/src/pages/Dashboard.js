@@ -191,6 +191,22 @@ const Dashboard = ({ addNotification }) => {
     });
   };
 
+  const formatDuration = (seconds) => {
+    if (!seconds || seconds <= 0) return '0s';
+    
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    } else if (minutes > 0) {
+      return `${minutes}m ${secs}s`;
+    } else {
+      return `${secs}s`;
+    }
+  };
+
 
 
   if (hasError) {
@@ -239,7 +255,7 @@ const Dashboard = ({ addNotification }) => {
 
       {/* Key Metrics */}
       <Container>
-        <ColumnLayout columns={6} variant="text-grid">
+        <ColumnLayout columns={4} variant="text-grid">
           <div>
             <Box variant="awsui-key-label">Total Jobs</Box>
             <Box variant="awsui-value-large">{stats.total_jobs || 0}</Box>
@@ -262,30 +278,15 @@ const Dashboard = ({ addNotification }) => {
               {stats.failed || 0}
             </Box>
           </div>
+        </ColumnLayout>
+        
+        <ColumnLayout columns={4} variant="text-grid">
           <div>
             <Box variant="awsui-key-label">Review Queue</Box>
             <Box variant="awsui-value-large" color={(stats.review_queue || 0) > 0 ? "text-status-warning" : undefined}>
               {stats.review_queue || 0}
             </Box>
           </div>
-          <div>
-            <Box variant="awsui-key-label">Avg Processing Time</Box>
-            <Box variant="awsui-value-large">
-              {stats.avg_processing_time ? `${stats.avg_processing_time}s` : '0s'}
-            </Box>
-          </div>
-        </ColumnLayout>
-      </Container>
-
-      {/* Additional Metrics */}
-      <Container
-        header={
-          <Header variant="h2">
-            Performance Metrics
-          </Header>
-        }
-      >
-        <ColumnLayout columns={4} variant="text-grid">
           <div>
             <Box variant="awsui-key-label">Success Rate</Box>
             <Box variant="awsui-value-large" color="text-status-success">
@@ -297,17 +298,15 @@ const Dashboard = ({ addNotification }) => {
             <Box variant="awsui-value-large">{stats.jobs_today || 0}</Box>
           </div>
           <div>
-            <Box variant="awsui-key-label">Pending</Box>
-            <Box variant="awsui-value-large" color={(stats.pending || 0) > 0 ? "text-status-info" : undefined}>
-              {stats.pending || 0}
+            <Box variant="awsui-key-label">Avg Processing Time</Box>
+            <Box variant="awsui-value-large">
+              {formatDuration(stats.avg_processing_time)}
             </Box>
-          </div>
-          <div>
-            <Box variant="awsui-key-label">Cancelled</Box>
-            <Box variant="awsui-value-large">{stats.cancelled || 0}</Box>
           </div>
         </ColumnLayout>
       </Container>
+
+
 
 
 

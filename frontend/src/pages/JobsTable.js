@@ -48,7 +48,16 @@ const JobsTable = ({ addNotification }) => {
 
     try {
       const data = await jobService.getJobs({ limit: 100 });
-      setJobs(data.jobs || []);
+      const newJobs = data.jobs || [];
+      setJobs(newJobs);
+      
+      // Preserve selection by matching job IDs
+      if (selectedItems.length > 0) {
+        const selectedIds = selectedItems.map(item => item.id);
+        const updatedSelection = newJobs.filter(job => selectedIds.includes(job.id));
+        setSelectedItems(updatedSelection);
+      }
+      
       setLoading(false);
       setErrorCount(0); // Reset error count on success
       setHasError(false);
@@ -73,7 +82,7 @@ const JobsTable = ({ addNotification }) => {
       
       setLoading(false);
     }
-  }, [addNotification, errorCount]);
+  }, [addNotification, errorCount, selectedItems]);
 
   useEffect(() => {
     fetchJobs();

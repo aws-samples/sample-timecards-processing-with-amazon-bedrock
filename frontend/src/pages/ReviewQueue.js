@@ -44,7 +44,16 @@ const ReviewQueue = ({ addNotification }) => {
 
     try {
       const data = await jobService.getReviewQueue();
-      setReviewItems(data.review_queue || []);
+      const newReviewItems = data.review_queue || [];
+      setReviewItems(newReviewItems);
+      
+      // Preserve selection by matching job IDs
+      if (selectedItems.length > 0) {
+        const selectedIds = selectedItems.map(item => item.job_id);
+        const updatedSelection = newReviewItems.filter(item => selectedIds.includes(item.job_id));
+        setSelectedItems(updatedSelection);
+      }
+      
       setLoading(false);
       setErrorCount(0); // Reset error count on success
       setHasError(false);
@@ -69,7 +78,7 @@ const ReviewQueue = ({ addNotification }) => {
       
       setLoading(false);
     }
-  }, [addNotification, errorCount]);
+  }, [addNotification, errorCount, selectedItems]);
 
   useEffect(() => {
     fetchReviewQueue();
