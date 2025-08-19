@@ -8,10 +8,14 @@ import {
   AppLayout,
   TopNavigation,
   SideNavigation,
-  BreadcrumbGroup,
   ContentLayout,
   Flashbar
 } from '@cloudscape-design/components';
+import { I18nProvider } from '@cloudscape-design/components/i18n';
+import messages from '@cloudscape-design/components/i18n/messages/all.en';
+
+// Components
+import { Breadcrumbs } from './components/Breadcrumbs';
 
 // Pages
 import Dashboard from './pages/Dashboard';
@@ -62,11 +66,11 @@ function AppContent() {
   };
 
   const navigationItems = [
+    { type: 'link', text: 'Dashboard', href: '/dashboard' },
     {
       type: 'section',
-      text: 'Timecard Processing',
+      text: 'Processing',
       items: [
-        { type: 'link', text: 'Dashboard', href: '/dashboard' },
         { type: 'link', text: 'Upload Files', href: '/upload' },
         { type: 'link', text: 'Jobs', href: '/jobs' },
         {
@@ -86,30 +90,7 @@ function AppContent() {
     }
   ];
 
-  const breadcrumbs = getBreadcrumbs(location.pathname);
 
-  function getBreadcrumbs(pathname) {
-    const baseBreadcrumb = { text: 'Timecard Processor', href: '/' };
-    
-    const routes = {
-      '/dashboard': [baseBreadcrumb, { text: 'Dashboard', href: '/dashboard' }],
-      '/upload': [baseBreadcrumb, { text: 'Upload Files', href: '/upload' }],
-      '/jobs': [baseBreadcrumb, { text: 'Jobs', href: '/jobs' }],
-      '/review': [baseBreadcrumb, { text: 'Review Queue', href: '/review' }],
-      '/settings': [baseBreadcrumb, { text: 'Settings', href: '/settings' }]
-    };
-
-    // Handle job details route
-    if (pathname.startsWith('/jobs/')) {
-      return [
-        baseBreadcrumb,
-        { text: 'Jobs', href: '/jobs' },
-        { text: 'Job Details', href: pathname }
-      ];
-    }
-
-    return routes[pathname] || [baseBreadcrumb, { text: 'Dashboard', href: '/dashboard' }];
-  }
 
   function getActiveHref(pathname) {
     // For job details pages, highlight the Jobs menu item
@@ -124,11 +105,7 @@ function AppContent() {
       <TopNavigation
         identity={{
           href: '/',
-          title: 'Timecard Processor',
-          logo: {
-            src: '/favicon/favicon.svg',
-            alt: 'Timecard Processor Logo'
-          }
+          title: 'Timecard Processor'
         }}
         utilities={[
           {
@@ -200,11 +177,17 @@ function AppContent() {
 
       <div style={{ flex: 1 }}>
         <AppLayout
+          contentType="default"
           navigationOpen={navigationOpen}
           onNavigationChange={({ detail }) => setNavigationOpen(detail.open)}
+          toolsHide={true}
           navigation={
             <SideNavigation
               activeHref={getActiveHref(location.pathname)}
+              header={{
+                href: '/dashboard',
+                text: 'Timecard Processor'
+              }}
               onFollow={(event) => {
                 if (!event.detail.external) {
                   event.preventDefault();
@@ -214,9 +197,7 @@ function AppContent() {
               items={navigationItems}
             />
           }
-          breadcrumbs={
-            <BreadcrumbGroup items={breadcrumbs} />
-          }
+          breadcrumbs={<Breadcrumbs />}
           notifications={
             <Flashbar items={notifications.map(notification => ({
               ...notification,
@@ -262,9 +243,11 @@ function AppContent() {
 
 function App() {
   return (
-    <Router>
-      <AppContent />
-    </Router>
+    <I18nProvider locale="en" messages={[messages]}>
+      <Router>
+        <AppContent />
+      </Router>
+    </I18nProvider>
   );
 }
 
