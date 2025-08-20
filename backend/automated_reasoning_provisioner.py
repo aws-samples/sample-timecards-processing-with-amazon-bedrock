@@ -37,55 +37,111 @@ class AutomatedReasoningProvisioner:
         return hashlib.md5(policy_doc.encode()).hexdigest()
     
     def _create_policy_document(self) -> str:
-        """Create policy document for mathematical validation"""
+        """Create policy document for mathematical validation - optimized for AR detection"""
         return """
-# Timecard Data Mathematical Validation Policy
+# Timecard Mathematical Validation Policy
 
-## Overview
-This policy validates mathematical consistency and data integrity in timecard processing using formal logic.
+## Purpose
+This policy validates mathematical accuracy in timecard data using formal logic reasoning.
 
-## Mathematical Consistency Rules
+## Core Validation Logic
 
-### Sum Validation
-- Total wage must equal the sum of all daily entries: total_wage = SUM(daily_rates)
-- Employee count must match unique employees: employee_count = COUNT(DISTINCT employees)
-- Total timecard count must equal daily entries length: total_timecards = LENGTH(daily_entries)
-- Average daily rate calculation: average_daily_rate = total_wage ÷ total_timecards
+### Primary Rule: Sum Validation
+When analyzing timecard data, verify that the reported total_wage equals the sum of all daily rates.
 
-### Data Integrity Checks
-- All daily rates must be positive numbers: daily_rate > 0
-- All dates must be valid and in YYYY-MM-DD format
-- Employee names must be consistent and non-empty
-- No duplicate entries for same employee on same date
-- All required fields must be present: [employee, date, rate, project, department]
+**Mathematical Formula:**
+- total_wage = sum_of_daily_rates
+- sum_of_daily_rates = daily_entries[0][2] + daily_entries[1][2] + ... + daily_entries[n][2]
 
-## Validation Examples
+**Validation Logic:**
+- IF total_wage ≠ sum_of_daily_rates THEN isTimecardValid = false
+- IF total_wage = sum_of_daily_rates THEN isTimecardValid = true
 
-### Valid Data
-Employee: John Doe, Total: 3 timecards
-Daily entries: [["John Doe", "2025-01-15", 200.0, "Project A", "Production"], ["John Doe", "2025-01-16", 250.0, "Project A", "Production"], ["John Doe", "2025-01-17", 300.0, "Project A", "Production"]]
-Total wage: 750.0 (200 + 250 + 300 = 750 ✓)
-Average: 250.0 (750 ÷ 3 = 250 ✓)
+### Detection Examples
 
-### Invalid Data - Calculation Error
-Employee: Jane Smith, Total: 2 timecards
-Daily entries: [["Jane Smith", "2025-01-15", 300.0, "Project B", "Audio"], ["Jane Smith", "2025-01-16", 400.0, "Project B", "Audio"]]
-Reported total wage: 800.0 (Should be 700.0 - ERROR)
-Status: INVALID - Mathematical calculation error
+**Example 1 - Mathematical Error (Should detect as invalid):**
+```
+Input: "Total Wage: $1000, Daily entries: Day 1: $200, Day 2: $300"
+Calculation: sum_daily_rates = 200 + 300 = 500
+Comparison: total_wage (1000) ≠ sum_daily_rates (500)
+Result: isTimecardValid = false (Mathematical inconsistency detected)
+```
 
-## Error Detection
-- INVALID: total_wage ≠ SUM(daily_rates)
-- INVALID: employee_count ≠ COUNT(DISTINCT employees)
-- INVALID: total_timecards ≠ LENGTH(daily_entries)
-- INVALID: Negative daily rates
-- INVALID: Missing required fields
-- INVALID: Duplicate entries
+**Example 2 - Correct Calculation (Should detect as valid):**
+```
+Input: "Total Wage: $500, Daily entries: Day 1: $200, Day 2: $300"  
+Calculation: sum_daily_rates = 200 + 300 = 500
+Comparison: total_wage (500) = sum_daily_rates (500)
+Result: isTimecardValid = true (Mathematics correct)
+```
+
+**Example 3 - Another Error Case:**
+```
+Input: "Total Wage: $800, Daily rates: [300, 400]"
+Calculation: sum_daily_rates = 300 + 400 = 700
+Comparison: total_wage (800) ≠ sum_daily_rates (700)
+Result: isTimecardValid = false (Sum mismatch detected)
+```
+
+## Formal Logic Rules
+
+### Rule 1: Sum Equality Check
+```
+PREMISE: total_wage = X AND sum_daily_rates = Y
+CLAIM: IF X ≠ Y THEN isTimecardValid = false
+CLAIM: IF X = Y THEN isTimecardValid = true
+```
+
+### Rule 2: Mathematical Consistency
+```
+PREMISE: daily_entries contains numeric values [a, b, c, ...]
+CLAIM: sum_daily_rates = a + b + c + ...
+CLAIM: IF total_wage ≠ sum_daily_rates THEN mathematical_error = true
+```
+
+### Rule 3: Validation Status
+```
+PREMISE: mathematical_error = true
+CLAIM: isTimecardValid = false
+CLAIM: validation_status = INVALID
+```
+
+## Training Examples for Automated Reasoning
+
+**Training Case 1:**
+- Input: total_wage=1000, daily_rates=[200,300]
+- Expected Logic: sum_daily_rates = 500, total_wage ≠ sum_daily_rates
+- Expected Result: isTimecardValid = false
+
+**Training Case 2:**
+- Input: total_wage=500, daily_rates=[200,300]  
+- Expected Logic: sum_daily_rates = 500, total_wage = sum_daily_rates
+- Expected Result: isTimecardValid = true
+
+**Training Case 3:**
+- Input: total_wage=1500, daily_rates=[400,500,600]
+- Expected Logic: sum_daily_rates = 1500, total_wage = sum_daily_rates  
+- Expected Result: isTimecardValid = true
+
+**Training Case 4:**
+- Input: total_wage=2000, daily_rates=[400,500,600]
+- Expected Logic: sum_daily_rates = 1500, total_wage ≠ sum_daily_rates
+- Expected Result: isTimecardValid = false
+
+## Key Concepts for AR Training
+- sum_daily_rates: The calculated sum of all daily rate values
+- total_wage: The reported total wage amount
+- isTimecardValid: Boolean indicating mathematical consistency
+- mathematical_error: Boolean indicating calculation mismatch
+- validation_status: VALID or INVALID based on mathematical checks
 """
     
-    def _check_existing_resources(self) -> Tuple[bool, bool]:
-        """Check if policy and guardrail already exist and are accessible in AWS"""
+    def _check_existing_resources(self) -> Tuple[bool, bool, bool]:
+        """Check if policy and guardrail exist and are properly connected in AWS"""
         policy_exists = False
         guardrail_exists = False
+        properly_connected = False
+        
         policy_arn = self.config_manager.get('automated_reasoning_policy_arn') if self.config_manager else None
         guardrail_id = self.config_manager.get('automated_reasoning_guardrail_id') if self.config_manager else None
         
@@ -97,7 +153,10 @@ Status: INVALID - Mathematical calculation error
                 )
                 policy_status = response.get("status")
                 policy_exists = policy_status == "ACTIVE"
-                logger.info(f"Found existing policy: {policy_arn} (status: {policy_status})")
+                logger.info(f"Policy check: {policy_arn} (status: {policy_status})")
+                
+                if not policy_exists:
+                    logger.warning(f"Policy exists but not active: {policy_status}")
             except Exception as e:
                 logger.warning(f"Policy not accessible in AWS: {e}")
                 # Clear from database since it doesn't exist in AWS
@@ -106,14 +165,18 @@ Status: INVALID - Mathematical calculation error
                     logger.info("Cleared invalid policy ARN from database")
         
         # Check guardrail
+        guardrail_response = None
         if guardrail_id:
             try:
-                response = self.bedrock_client.get_guardrail(
+                guardrail_response = self.bedrock_client.get_guardrail(
                     guardrailIdentifier=guardrail_id
                 )
-                guardrail_status = response.get("status")
+                guardrail_status = guardrail_response.get("status")
                 guardrail_exists = guardrail_status == "READY"
-                logger.info(f"Found existing guardrail: {guardrail_id} (status: {guardrail_status})")
+                logger.info(f"Guardrail check: {guardrail_id} (status: {guardrail_status})")
+                
+                if not guardrail_exists:
+                    logger.warning(f"Guardrail exists but not ready: {guardrail_status}")
             except Exception as e:
                 logger.warning(f"Guardrail not accessible in AWS: {e}")
                 # Clear from database since it doesn't exist in AWS
@@ -122,14 +185,27 @@ Status: INVALID - Mathematical calculation error
                     self.config_manager.set('automated_reasoning_guardrail_version', None)
                     logger.info("Cleared invalid guardrail ID from database")
         
-        return policy_exists, guardrail_exists
+        # Check if they're properly connected
+        if policy_exists and guardrail_exists and guardrail_response and policy_arn:
+            ar_config = guardrail_response.get('automatedReasoningPolicy', {})
+            attached_policies = ar_config.get('policies', [])
+            
+            if policy_arn in attached_policies:
+                properly_connected = True
+                logger.info(f"Policy properly attached to guardrail")
+            else:
+                logger.warning(f"Policy not attached to guardrail")
+                logger.warning(f"   Expected: {policy_arn}")
+                logger.warning(f"   Found: {attached_policies}")
+        
+        return policy_exists, guardrail_exists, properly_connected
     
     def _create_policy(self) -> str:
         """Create Automated Reasoning policy (check for existing first)"""
         
         # First check if we have a policy ARN in database
         existing_policy_arn = self.config_manager.get('automated_reasoning_policy_arn') if self.config_manager else None
-        if existing_policy_arn:
+        if existing_policy_arn and existing_policy_arn != 'None':
             try:
                 policy_details = self.bedrock_client.get_automated_reasoning_policy(
                     policyArn=existing_policy_arn
@@ -197,9 +273,20 @@ Status: INVALID - Mathematical calculation error
         try:
             document_content = self._create_policy_document()
             instructions = """
-            Create a mathematical validation policy for timecard data.
-            Focus on detecting calculation errors, count mismatches, and data inconsistencies.
-            Use formal logic to verify arithmetic operations and data integrity.
+            Create a mathematical validation policy for timecard data using formal logic reasoning.
+            
+            Key Focus Areas:
+            1. Detect sum calculation errors (total_wage ≠ sum_of_daily_rates)
+            2. Use formal logic to determine isTimecardValid status
+            3. Apply mathematical consistency checks
+            4. Generate clear validation findings with confidence scores
+            
+            The policy should use automated reasoning to detect when:
+            - total_wage does not equal the sum of daily rates
+            - Mathematical inconsistencies exist in timecard data
+            - Validation status should be marked as invalid
+            
+            Training should focus on mathematical logic and arithmetic validation.
             """
             
             response = self.bedrock_client.start_automated_reasoning_policy_build_workflow(
@@ -333,11 +420,13 @@ Status: INVALID - Mathematical calculation error
         guardrail_name = f"timecard-math-guardrail-{uuid.uuid4().hex[:8]}"
         
         try:
+            # Use exact same configuration as working guardrail 6zgrmd9ertgj
             response = self.bedrock_client.create_guardrail(
                 name=guardrail_name,
+                description="Mathematical validation guardrail for timecard data with Automated Reasoning",
                 automatedReasoningPolicyConfig={
                     "policies": [policy_arn],
-                    "confidenceThreshold": 1.0
+                    "confidenceThreshold": 0.3  # Same as working guardrail
                 },
                 crossRegionConfig={
                     'guardrailProfileIdentifier': 'us.guardrail.v1:0'
@@ -359,35 +448,107 @@ Status: INVALID - Mathematical calculation error
             raise
     
     def _test_guardrail(self, guardrail_id: str, guardrail_version: str) -> bool:
-        """Test the guardrail with sample data"""
+        """Test the guardrail with sample data that should trigger validation errors"""
         try:
-            user_query = """
-            Validate timecard: Employee John Doe, 2 days, rates [300, 400], total wage: 800
+            # Test 1: Mathematical sum error (should be INVALID)
+            invalid_response = """
+            {
+                "employee_name": "John Doe",
+                "employee_count": 1,
+                "total_timecards": 2,
+                "total_wage": 800.0,
+                "average_daily_rate": 400.0,
+                "daily_entries": [
+                    ["John Doe", "2025-01-15", 300.0, "Project A", "Production"],
+                    ["John Doe", "2025-01-16", 400.0, "Project A", "Production"]
+                ]
+            }
             """
             
-            llm_response = """
-            Mathematical validation: Sum of rates = 300 + 400 = 700, but reported total = 800.
-            Error detected: Total wage (800) ≠ Sum of daily rates (700).
-            Status: INVALID
-            """
-            
-            content_to_validate = [
-                {"text": {"text": user_query, "qualifiers": ["query"]}},
-                {"text": {"text": llm_response, "qualifiers": ["guard_content"]}}
-            ]
-            
-            response = self.runtime_client.apply_guardrail(
+            response1 = self.runtime_client.apply_guardrail(
                 guardrailIdentifier=guardrail_id,
                 guardrailVersion=guardrail_version,
                 source="OUTPUT",
-                content=content_to_validate
+                content=[{"text": {"text": invalid_response}}]
             )
             
-            # Check if guardrail detected the mathematical error
-            action = response.get("action", "NONE")
-            logger.info(f"Guardrail test result: {action}")
+            action1 = response1.get("action", "NONE")
+            logger.info(f"Test 1 (Invalid sum - should block): {action1}")
             
-            return True  # Test completed successfully
+            # Test 2: Valid data (should pass)
+            valid_response = """
+            {
+                "employee_name": "Jane Smith",
+                "employee_count": 1,
+                "total_timecards": 2,
+                "total_wage": 700.0,
+                "average_daily_rate": 350.0,
+                "daily_entries": [
+                    ["Jane Smith", "2025-01-15", 300.0, "Project B", "Audio"],
+                    ["Jane Smith", "2025-01-16", 400.0, "Project B", "Audio"]
+                ]
+            }
+            """
+            
+            response2 = self.runtime_client.apply_guardrail(
+                guardrailIdentifier=guardrail_id,
+                guardrailVersion=guardrail_version,
+                source="OUTPUT",
+                content=[{"text": {"text": valid_response}}]
+            )
+            
+            action2 = response2.get("action", "NONE")
+            logger.info(f"Test 2 (Valid data - should pass): {action2}")
+            
+            # Test 3: Count mismatch (should be INVALID)
+            count_error_response = """
+            {
+                "employee_name": "Bob Wilson",
+                "employee_count": 2,
+                "total_timecards": 5,
+                "total_wage": 600.0,
+                "average_daily_rate": 300.0,
+                "daily_entries": [
+                    ["Bob Wilson", "2025-01-15", 300.0, "Project C", "Video"],
+                    ["Bob Wilson", "2025-01-16", 300.0, "Project C", "Video"]
+                ]
+            }
+            """
+            
+            response3 = self.runtime_client.apply_guardrail(
+                guardrailIdentifier=guardrail_id,
+                guardrailVersion=guardrail_version,
+                source="OUTPUT",
+                content=[{"text": {"text": count_error_response}}]
+            )
+            
+            action3 = response3.get("action", "NONE")
+            logger.info(f"Test 3 (Count mismatch - should block): {action3}")
+            
+            # Analyze results
+            tests_passed = 0
+            if action1 in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
+                tests_passed += 1
+                logger.info("✓ Test 1 PASSED: Invalid sum correctly blocked")
+            else:
+                logger.warning("✗ Test 1 FAILED: Invalid sum not blocked")
+                
+            if action2 == "NONE":
+                tests_passed += 1
+                logger.info("✓ Test 2 PASSED: Valid data correctly allowed")
+            else:
+                logger.warning("✗ Test 2 FAILED: Valid data incorrectly blocked")
+                
+            if action3 in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
+                tests_passed += 1
+                logger.info("✓ Test 3 PASSED: Count mismatch correctly blocked")
+            else:
+                logger.warning("✗ Test 3 FAILED: Count mismatch not blocked")
+            
+            success_rate = tests_passed / 3
+            logger.info(f"Guardrail test results: {tests_passed}/3 tests passed ({success_rate:.1%})")
+            
+            return tests_passed >= 2  # At least 2/3 tests should pass
             
         except Exception as e:
             logger.error(f"Guardrail test failed: {e}")
@@ -438,45 +599,76 @@ Status: INVALID - Mathematical calculation error
                 logger.info(f"   Policy ARN: {policy_arn or 'None'}")
                 logger.info(f"   Guardrail ID: {guardrail_id or 'None'}")
                 
-                # If status is ready, verify resources actually exist in AWS
-                if current_status == 'ready' and policy_arn and guardrail_id and not force_recreate:
+                # Always verify resources exist in AWS and are properly connected
+                if current_status == 'ready' and not force_recreate:
                     logger.info("Verifying existing resources in AWS...")
                     try:
-                        policy_exists, guardrail_exists = self._check_existing_resources()
+                        # Check if we have the required IDs
+                        if not policy_arn or not guardrail_id:
+                            logger.warning("Missing policy ARN or guardrail ID in database")
+                            # Before starting fresh, check if there are existing resources we can use
+                            policy_exists, guardrail_exists, properly_connected = self._check_existing_resources()
+                            if policy_exists or guardrail_exists:
+                                logger.info("Found existing resources, attempting to use them...")
+                                return self._get_current_status()
+                            logger.info("No existing resources found, starting fresh provisioning...")
+                            return self._start_async_creation()
                         
-                        if policy_exists and guardrail_exists:
-                            logger.info("Automated Reasoning READY - Using existing resources")
-                            logger.info(f"   Policy: {policy_arn}")
-                            logger.info(f"   Guardrail: {guardrail_id}")
-                            return {
-                                "policy_arn": policy_arn,
-                                "guardrail_id": guardrail_id,
-                                "guardrail_version": self.config_manager.get('automated_reasoning_guardrail_version', 'DRAFT'),
-                                "status": "ready",
-                                "created": False
-                            }
-                        else:
-                            logger.warning("Resources missing in AWS, but not auto-recreating to prevent loops")
-                            logger.warning("Manual intervention may be required via retry endpoint")
-                            return {
-                                "policy_arn": policy_arn,
-                                "guardrail_id": guardrail_id,
-                                "guardrail_version": self.config_manager.get('automated_reasoning_guardrail_version', 'DRAFT'),
-                                "status": "ready",  # Keep ready status to prevent auto-recreation
-                                "created": False,
-                                "warning": "Resources may be missing in AWS"
-                            }
-                    except Exception as e:
-                        logger.error(f"Failed to verify resources: {e}")
-                        # Don't change status on verification errors
+                        # Verify policy exists and is active
+                        try:
+                            policy_response = self.bedrock_client.get_automated_reasoning_policy(
+                                policyArn=policy_arn
+                            )
+                            policy_status = policy_response.get("status")
+                            if policy_status != "ACTIVE":
+                                logger.warning(f"Policy exists but not active: {policy_status}")
+                                return self._start_async_creation()
+                        except Exception as e:
+                            logger.warning(f"Policy not accessible: {e}")
+                            return self._start_async_creation()
+                        
+                        # Verify guardrail exists and is ready
+                        try:
+                            guardrail_response = self.bedrock_client.get_guardrail(
+                                guardrailIdentifier=guardrail_id
+                            )
+                            guardrail_status = guardrail_response.get("status")
+                            if guardrail_status != "READY":
+                                logger.warning(f"Guardrail exists but not ready: {guardrail_status}")
+                                return self._start_async_creation()
+                        except Exception as e:
+                            logger.warning(f"Guardrail not accessible: {e}")
+                            return self._start_async_creation()
+                        
+                        # Verify guardrail has the policy attached
+                        ar_config = guardrail_response.get('automatedReasoningPolicy', {})
+                        attached_policies = ar_config.get('policies', [])
+                        
+                        if policy_arn not in attached_policies:
+                            logger.warning(f"Policy not attached to guardrail")
+                            logger.warning(f"   Expected: {policy_arn}")
+                            logger.warning(f"   Found: {attached_policies}")
+                            return self._start_async_creation()
+                        
+                        # All checks passed - resources are properly configured
+                        logger.info("Automated Reasoning READY - All resources verified")
+                        logger.info(f"   Policy: {policy_arn} (status: {policy_status})")
+                        logger.info(f"   Guardrail: {guardrail_id} (status: {guardrail_status})")
+                        logger.info(f"   Policy properly attached to guardrail")
+                        
                         return {
                             "policy_arn": policy_arn,
                             "guardrail_id": guardrail_id,
                             "guardrail_version": self.config_manager.get('automated_reasoning_guardrail_version', 'DRAFT'),
                             "status": "ready",
                             "created": False,
-                            "error": f"Verification failed: {str(e)}"
+                            "verified": True
                         }
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to verify resources: {e}")
+                        logger.info("Starting fresh provisioning due to verification failure...")
+                        return self._start_async_creation()
                 
                 # If currently creating, check progress
                 if current_status == 'creating' and policy_arn and build_workflow_id:
@@ -516,6 +708,12 @@ Status: INVALID - Mathematical calculation error
         try:
             logger.info("Starting Automated Reasoning creation process...")
             
+            # First check if there are already existing resources we can use
+            policy_exists, guardrail_exists, properly_connected = self._check_existing_resources()
+            if policy_exists and guardrail_exists and properly_connected:
+                logger.info("Found fully configured resources, using existing setup")
+                return self._get_current_status()
+            
             # Check if we have partial resources and clean them up
             existing_policy_arn = self.config_manager.get('automated_reasoning_policy_arn') if self.config_manager else None
             existing_guardrail_id = self.config_manager.get('automated_reasoning_guardrail_id') if self.config_manager else None
@@ -550,7 +748,7 @@ Status: INVALID - Mathematical calculation error
             
             if existing_policy_arn or existing_guardrail_id:
                 logger.info("Found partial resources, verifying before cleanup...")
-                policy_exists, guardrail_exists = self._check_existing_resources()
+                policy_exists, guardrail_exists, properly_connected = self._check_existing_resources()
                 
                 # If we have a valid policy but no guardrail, try to use the existing policy
                 if policy_exists and not guardrail_exists:

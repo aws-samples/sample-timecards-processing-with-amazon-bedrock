@@ -75,27 +75,35 @@ class TimecardPipeline:
         self.review_queue = []
 
     def _ensure_automated_reasoning_ready(self):
-        """Ensure Automated Reasoning is provisioned (non-blocking)"""
+        """Ensure Automated Reasoning is provisioned and properly configured"""
         try:
-            from automated_reasoning_provisioner import auto_provision_if_needed
+            from automated_reasoning_provisioner import AutomatedReasoningProvisioner
 
-            logger.info("Checking Automated Reasoning configuration...")
+            logger.info("Verifying Automated Reasoning configuration...")
 
-            # Non-blocking check/provision
-            result = auto_provision_if_needed(
-                config_manager=self.config,
+            # Create provisioner and do thorough check
+            provisioner = AutomatedReasoningProvisioner(
                 region_name=self.config.aws_region if self.config else "us-west-2",
+                config_manager=self.config
             )
+            
+            result = provisioner.ensure_provisioned()
 
             status = result.get("status", "unknown")
             policy_arn = result.get("policy_arn")
             guardrail_id = result.get("guardrail_id")
+            verified = result.get("verified", False)
 
-            if status == "ready":
-                logger.info("Automated Reasoning is READY")
+            if status == "ready" and verified:
+                logger.info("Automated Reasoning is READY and VERIFIED")
                 logger.info(f"   Policy ARN: {policy_arn}")
                 logger.info(f"   Guardrail ID: {guardrail_id}")
                 logger.info("   Mathematical validation will use formal logic")
+            elif status == "ready" and not verified:
+                logger.warning("Automated Reasoning marked ready but not verified")
+                logger.info(f"   Policy ARN: {policy_arn}")
+                logger.info(f"   Guardrail ID: {guardrail_id}")
+                logger.info("   Using fallback validation until verification complete")
             elif status == "creating":
                 logger.info("Automated Reasoning setup IN PROGRESS")
                 logger.info(f"   Policy ARN: {policy_arn}")
@@ -131,21 +139,32 @@ class TimecardPipeline:
             logger.debug(f"   Guardrail ID: {guardrail_id or 'None'}")
             logger.debug(f"   Version: {guardrail_version}")
 
-            if guardrail_id and ar_status == "ready":
-                config = {
-                    "guardrailIdentifier": guardrail_id,
-                    "guardrailVersion": guardrail_version,
-                    "trace": "enabled",  # Enable tracing for debugging
-                }
-                logger.debug(f"Returning guardrail config: {guardrail_id}")
-                return config
-            elif guardrail_id and ar_status == "creating":
-                logger.debug(
-                    f"Guardrail exists but status is 'creating', not using yet"
-                )
-                return None
+            # More lenient check - use guardrail if it exists, regardless of status
+            if guardrail_id:
+                # Verify guardrail actually exists in AWS
+                try:
+                    response = self.guardrails.get_guardrail(
+                        guardrailIdentifier=guardrail_id
+                    )
+                    guardrail_status = response.get("status")
+                    
+                    if guardrail_status == "READY":
+                        config = {
+                            "guardrailIdentifier": guardrail_id,
+                            "guardrailVersion": guardrail_version or "DRAFT",
+                            "trace": "enabled",  # Enable tracing for debugging
+                        }
+                        logger.info(f"Using active guardrail: {guardrail_id} (status: {guardrail_status})")
+                        return config
+                    else:
+                        logger.warning(f"Guardrail exists but not ready: {guardrail_status}")
+                        return None
+                        
+                except Exception as verify_e:
+                    logger.warning(f"Guardrail verification failed: {verify_e}")
+                    return None
             else:
-                logger.debug(f"No guardrail available (status: {ar_status})")
+                logger.debug(f"No guardrail ID configured (status: {ar_status})")
                 return None
 
         except Exception as e:
@@ -395,73 +414,171 @@ class TimecardPipeline:
             validation_passed = True
             validation_confidence = 1.0
 
-            if "trace" in response and "guardrail" in response["trace"]:
-                guardrail_trace = response["trace"]["guardrail"]
-                guardrail_action = guardrail_trace.get("action", "NONE")
+            # Debug: Log the full response structure for troubleshooting
+            logger.debug(f"Full Bedrock response keys: {list(response.keys())}")
+            if "trace" in response:
+                trace_data = response["trace"]
+                if isinstance(trace_data, dict):
+                    logger.debug(f"Trace keys: {list(trace_data.keys())}")
+                else:
+                    logger.debug(f"Trace is not a dict, type: {type(trace_data)}")
 
-                logger.info(f"Automated Reasoning Guardrail Response:")
-                logger.info(f"   Action: {guardrail_action}")
-
-                # Extract Automated Reasoning findings if available
-                if "modelOutput" in guardrail_trace:
-                    model_output = guardrail_trace["modelOutput"]
-                    if (
-                        "assessments" in model_output
-                        and "automatedReasoning" in model_output["assessments"]
-                    ):
-                        ar_assessment = model_output["assessments"][
-                            "automatedReasoning"
-                        ]
-                        guardrail_findings = ar_assessment.get("findings", [])
-
-                        logger.info(
-                            f"   Automated Reasoning Findings: {len(guardrail_findings)} findings"
+            # Check if guardrail was applied and outputAssessments are available
+            output_assessments_found = False
+            
+            if "trace" in response:
+                trace_data = response["trace"]
+                
+                # Handle both dict and list trace formats
+                if isinstance(trace_data, dict) and "guardrail" in trace_data:
+                    guardrail_trace = trace_data["guardrail"]
+                    guardrail_action = guardrail_trace.get("action", "NONE")
+                    
+                    logger.info(f"Automated Reasoning Guardrail Response:")
+                    logger.info(f"   Action: {guardrail_action}")
+                    
+                    # Check for outputAssessments
+                    if "outputAssessments" in guardrail_trace:
+                        output_assessments = guardrail_trace["outputAssessments"]
+                        if output_assessments and isinstance(output_assessments, dict):
+                            for guardrail_id, assessments in output_assessments.items():
+                                if isinstance(assessments, list) and assessments:
+                                    for assessment in assessments:
+                                        if "automatedReasoningPolicy" in assessment:
+                                            ar_data = assessment["automatedReasoningPolicy"]
+                                            findings = ar_data.get("findings", [])
+                                            if findings:
+                                                output_assessments_found = True
+                                                guardrail_findings.extend(findings)
+                                                logger.info(f"   Found {len(findings)} AR findings in outputAssessments")
+                                                
+                                                # Process findings for validation
+                                                validation_passed, validation_confidence = self._process_ar_findings(findings)
+                    
+                    if not output_assessments_found:
+                        logger.warning("   No outputAssessments found in guardrail trace")
+                        logger.info("   Will use explicit apply_guardrail for validation")
+                        
+                elif isinstance(trace_data, list):
+                    logger.debug(f"Trace is a list with {len(trace_data)} items")
+                    # Handle list format if needed in the future
+                else:
+                    logger.debug(f"Trace format not recognized: {type(trace_data)}")
+            
+            # If no outputAssessments or guardrail not configured, use explicit apply_guardrail
+            if guardrail_config and not output_assessments_found:
+                logger.info(" Applying explicit guardrail validation...")
+                
+                # Get the LLM response text for validation
+                llm_response_text = ""
+                if "content" in output_message:
+                    for content_item in output_message["content"]:
+                        if content_item.get("toolUse"):
+                            # Convert tool use to JSON string for validation
+                            llm_response_text = json.dumps(content_item["toolUse"]["input"], indent=2)
+                            break
+                        elif content_item.get("text"):
+                            llm_response_text = content_item["text"]
+                            break
+                
+                if llm_response_text:
+                    try:
+                        # Truncate content if too long (apply_guardrail has limits)
+                        max_content_length = 10000  # Conservative limit
+                        if len(llm_response_text) > max_content_length:
+                            logger.warning(f"   Content too long ({len(llm_response_text)} chars), truncating to {max_content_length}")
+                            llm_response_text = llm_response_text[:max_content_length] + "..."
+                        
+                        # Apply guardrail explicitly to the LLM response
+                        apply_guardrail_response = self.bedrock.apply_guardrail(
+                            guardrailIdentifier=guardrail_config["guardrailIdentifier"],
+                            guardrailVersion=guardrail_config.get("guardrailVersion", "DRAFT"),
+                            source="OUTPUT",
+                            content=[{"text": {"text": llm_response_text}}]
                         )
-                        for i, finding in enumerate(guardrail_findings):
-                            result = finding.get("result", "UNKNOWN")
-                            rule_desc = finding.get("ruleDescription", "No description")
-                            logger.info(f"     Finding {i+1}: {result} - {rule_desc}")
-
-                        # Check if validation passed
-                        if guardrail_action in ["GUARDRAIL_INTERVENED", "BLOCKED"]:
-                            validation_passed = False
-                            validation_confidence = 0.3
-                            logger.info(
-                                f"   Validation FAILED: Guardrail {guardrail_action}"
-                            )
-                        elif any(
-                            f.get("result") == "INVALID" for f in guardrail_findings
-                        ):
-                            validation_passed = False
-                            validation_confidence = 0.5
-                            logger.info(
-                                f"   Validation FAILED: Invalid findings detected"
-                            )
-                        elif any(
-                            f.get("result") == "SATISFIABLE" for f in guardrail_findings
-                        ):
-                            validation_confidence = 0.7
-                            logger.info(f"   Validation PARTIAL: Satisfiable findings")
+                        
+                        # Extract findings from apply_guardrail response
+                        explicit_action = apply_guardrail_response.get("action", "NONE")
+                        explicit_usage = apply_guardrail_response.get("usage", {})
+                        explicit_outputs = apply_guardrail_response.get("outputs", [])
+                        
+                        logger.info(f"   Explicit Guardrail Action: {explicit_action}")
+                        logger.info(f"   Explicit Usage: {explicit_usage}")
+                        
+                        # Extract AR findings from explicit call
+                        explicit_ar_findings = []
+                        for output in explicit_outputs:
+                            if "automatedReasoning" in output:
+                                ar_data = output["automatedReasoning"]
+                                findings = ar_data.get("findings", [])
+                                explicit_ar_findings.extend(findings)
+                        
+                        if explicit_ar_findings:
+                            logger.info(f"   Found {len(explicit_ar_findings)} AR findings from explicit call")
+                            guardrail_findings.extend(explicit_ar_findings)
+                            
+                            # Process findings for validation
+                            validation_passed, validation_confidence = self._process_ar_findings(explicit_ar_findings)
+                            
+                            # Update guardrail action if explicit call found issues
+                            if explicit_action != "NONE":
+                                guardrail_action = explicit_action
                         else:
-                            logger.info(f"   Validation PASSED: All checks successful")
-                    else:
-                        logger.info(
-                            f"   No Automated Reasoning assessments found in trace"
-                        )
+                            logger.info("   No AR findings from explicit guardrail call")
+                            
+                    except Exception as explicit_error:
+                        error_msg = str(explicit_error)
+                        logger.error(f"   Explicit guardrail call failed: {error_msg}")
+                        
+                        # If it's a ValidationException, try with simpler content
+                        if "ValidationException" in error_msg and len(llm_response_text) > 1000:
+                            logger.info("   Retrying with simplified content...")
+                            try:
+                                # Extract just the key mathematical data for validation
+                                simple_content = f"total_wage: {extracted.get('total_wage', 0)}, daily_entries_count: {len(extracted.get('daily_entries', []))}"
+                                
+                                apply_guardrail_response = self.bedrock.apply_guardrail(
+                                    guardrailIdentifier=guardrail_config["guardrailIdentifier"],
+                                    guardrailVersion=guardrail_config.get("guardrailVersion", "DRAFT"),
+                                    source="OUTPUT",
+                                    content=[{"text": {"text": simple_content}}]
+                                )
+                                
+                                explicit_action = apply_guardrail_response.get("action", "NONE")
+                                explicit_usage = apply_guardrail_response.get("usage", {})
+                                explicit_outputs = apply_guardrail_response.get("outputs", [])
+                                
+                                logger.info(f"   Retry Guardrail Action: {explicit_action}")
+                                logger.info(f"   Retry Usage: {explicit_usage}")
+                                
+                                # Process any findings from retry
+                                explicit_ar_findings = []
+                                for output in explicit_outputs:
+                                    if "automatedReasoning" in output:
+                                        ar_data = output["automatedReasoning"]
+                                        findings = ar_data.get("findings", [])
+                                        explicit_ar_findings.extend(findings)
+                                
+                                if explicit_ar_findings:
+                                    logger.info(f"   Found {len(explicit_ar_findings)} AR findings from retry")
+                                    guardrail_findings.extend(explicit_ar_findings)
+                                    validation_passed, validation_confidence = self._process_ar_findings(explicit_ar_findings)
+                                    if explicit_action != "NONE":
+                                        guardrail_action = explicit_action
+                                        
+                            except Exception as retry_error:
+                                logger.error(f"   Retry also failed: {retry_error}")
                 else:
-                    logger.info(f"   No model output found in guardrail trace")
+                    logger.warning("   No LLM response text found for explicit validation")
+            
+            # Log final validation result
+            if not validation_passed:
+                logger.info(f"   Final Validation: FAILED (confidence: {validation_confidence})")
             else:
-                if guardrail_config:
-                    logger.warning(
-                        f"Guardrail configured but no trace found in response"
-                    )
-                    logger.warning(
-                        f"   This may indicate the guardrail is not properly attached"
-                    )
-                else:
-                    logger.info(
-                        f"No guardrail trace (expected - no guardrail configured)"
-                    )
+                logger.info(f"   Final Validation: PASSED")
+                
+            if not guardrail_config:
+                logger.info("No guardrail trace (expected - no guardrail configured)")
 
             if "content" not in output_message:
                 raise Exception("No content in response")
@@ -1041,6 +1158,222 @@ class TimecardPipeline:
         except Exception as e:
             logger.error(f"Pipeline failed: {e}")
             return {"status": "error", "error": str(e), "file_path": excel_path}
+
+    def test_guardrail_with_invalid_data(self) -> Dict[str, Any]:
+        """Test the guardrail with intentionally invalid data to verify it's working"""
+        try:
+            guardrail_config = self._get_guardrail_config()
+            if not guardrail_config:
+                return {
+                    "status": "error",
+                    "message": "No guardrail configured for testing"
+                }
+            
+            # Create VERY obvious invalid timecard data with clear mathematical errors
+            invalid_test_data = """
+            TIMECARD VALIDATION TEST:
+            
+            Employee: John Doe
+            Total Wage Reported: $1000.00
+            Daily Entries:
+            - Day 1: $200.00
+            - Day 2: $300.00
+            
+            MATHEMATICAL ERROR: 
+            Sum of daily entries = $200 + $300 = $500
+            But reported total wage = $1000
+            This is clearly incorrect: $500 ≠ $1000
+            
+            JSON Data:
+            {
+                "employee_name": "John Doe",
+                "employee_count": 1,
+                "total_timecards": 2,
+                "total_wage": 1000.0,
+                "daily_entries": [
+                    ["John Doe", "2025-01-15", 200.0, "Project A", "Production"],
+                    ["John Doe", "2025-01-16", 300.0, "Project A", "Production"]
+                ]
+            }
+            
+            VALIDATION RESULT: This data contains mathematical errors and should be marked as INVALID.
+            """
+            
+            logger.info(f"Testing guardrail with ID: {guardrail_config['guardrailIdentifier']}")
+            
+            # Test with apply_guardrail directly
+            response = self.bedrock.apply_guardrail(
+                guardrailIdentifier=guardrail_config["guardrailIdentifier"],
+                guardrailVersion=guardrail_config.get("guardrailVersion", "DRAFT"),
+                source="OUTPUT",
+                content=[{"text": {"text": invalid_test_data}}]
+            )
+            
+            action = response.get("action", "NONE")
+            outputs = response.get("outputs", [])
+            usage = response.get("usage", {})
+            
+            logger.info(f"Guardrail response action: {action}")
+            logger.info(f"Usage: {usage}")
+            logger.info(f"Outputs count: {len(outputs)}")
+            
+            # Check for automated reasoning findings
+            ar_findings = []
+            if outputs:
+                for i, output in enumerate(outputs):
+                    logger.info(f"Output {i+1} keys: {list(output.keys())}")
+                    if "automatedReasoning" in output:
+                        ar_data = output["automatedReasoning"]
+                        findings = ar_data.get("findings", [])
+                        ar_findings.extend(findings)
+                        logger.info(f"Found {len(findings)} AR findings in output {i+1}")
+                    else:
+                        logger.info(f"No automatedReasoning in output {i+1}")
+            
+            # Also test with a simpler approach - just the JSON
+            logger.info("Testing with simple JSON...")
+            simple_json = '{"total_wage": 1000, "daily_entries": [["John", "2025-01-15", 200], ["John", "2025-01-16", 300]]}'
+            
+            response2 = self.bedrock.apply_guardrail(
+                guardrailIdentifier=guardrail_config["guardrailIdentifier"],
+                guardrailVersion=guardrail_config.get("guardrailVersion", "DRAFT"),
+                source="OUTPUT",
+                content=[{"text": {"text": simple_json}}]
+            )
+            
+            action2 = response2.get("action", "NONE")
+            logger.info(f"Simple JSON test action: {action2}")
+            
+            return {
+                "status": "success",
+                "test_data": invalid_test_data,
+                "guardrail_action": action,
+                "simple_test_action": action2,
+                "automated_reasoning_findings": ar_findings,
+                "expected_action": "GUARDRAIL_INTERVENED or BLOCKED",
+                "test_passed": action in ["GUARDRAIL_INTERVENED", "BLOCKED"] or action2 in ["GUARDRAIL_INTERVENED", "BLOCKED"],
+                "message": f"Guardrail {'WORKING' if action in ['GUARDRAIL_INTERVENED', 'BLOCKED'] else 'NOT WORKING'} - Action: {action}",
+                "full_response": response,
+                "usage": usage
+            }
+            
+        except Exception as e:
+            logger.error(f"Guardrail test failed: {e}")
+            return {
+                "status": "error",
+                "message": f"Test failed: {str(e)}"
+            }
+
+    def _process_ar_findings(self, findings: List[Dict[str, Any]]) -> tuple[bool, float]:
+        """Process Automated Reasoning findings and determine validation status"""
+        validation_passed = True
+        validation_confidence = 1.0
+        
+        invalid_count = 0
+        satisfiable_with_errors = 0
+        valid_with_errors = 0
+        
+        for i, finding in enumerate(findings):
+            if "invalid" in finding:
+                invalid_count += 1
+                confidence = finding["invalid"].get("translation", {}).get("confidence", 0)
+                logger.info(f"     Finding {i+1}: INVALID - {confidence} confidence")
+                validation_passed = False
+                validation_confidence = min(validation_confidence, 0.3)
+                
+            elif "satisfiable" in finding:
+                confidence = finding["satisfiable"].get("translation", {}).get("confidence", 0)
+                logger.info(f"     Finding {i+1}: SATISFIABLE - {confidence} confidence")
+                
+                # Check for mathematical errors in claims
+                claims = finding["satisfiable"].get("translation", {}).get("claims", [])
+                for claim in claims:
+                    claim_text = claim.get("naturalLanguage", "").lower()
+                    if "invalid" in claim_text or "mathematical_error" in claim_text or "false" in claim_text:
+                        satisfiable_with_errors += 1
+                        validation_passed = False
+                        validation_confidence = min(validation_confidence, 0.6)
+                        logger.info(f"       Mathematical error detected in satisfiable finding")
+                        break
+                        
+            elif "valid" in finding:
+                confidence = finding["valid"].get("translation", {}).get("confidence", 0)
+                logger.info(f"     Finding {i+1}: VALID - {confidence} confidence")
+                
+                # Check if valid finding indicates validation failure
+                claims = finding["valid"].get("translation", {}).get("claims", [])
+                for claim in claims:
+                    claim_text = claim.get("naturalLanguage", "").lower()
+                    if ("istimecardvalid is false" in claim_text or 
+                        "validation_status is equal to invalid" in claim_text or
+                        "mathematical_error" in claim_text):
+                        valid_with_errors += 1
+                        validation_passed = False
+                        validation_confidence = min(validation_confidence, 0.7)
+                        logger.info(f"       Validation failure detected in valid finding")
+                        break
+                        
+            elif "noTranslations" in finding:
+                logger.info(f"     Finding {i+1}: NO_TRANSLATIONS - Complex logic detected")
+                # noTranslations often indicates complex mathematical reasoning
+                validation_confidence = min(validation_confidence, 0.8)
+                
+            else:
+                logger.info(f"     Finding {i+1}: {list(finding.keys())}")
+        
+        # Log summary
+        total_error_indicators = invalid_count + satisfiable_with_errors + valid_with_errors
+        if total_error_indicators > 0:
+            logger.info(f"   AR Summary: {total_error_indicators} error indicators found")
+            logger.info(f"     Invalid: {invalid_count}, Satisfiable w/errors: {satisfiable_with_errors}, Valid w/errors: {valid_with_errors}")
+        else:
+            logger.info(f"   AR Summary: No error indicators found in {len(findings)} findings")
+        
+        return validation_passed, validation_confidence
+
+    def _process_guardrail_dict(self, guardrail_trace, guardrail_findings, validation_passed, validation_confidence):
+        """Process guardrail trace in dict format"""
+        try:
+            # Extract Automated Reasoning findings if available
+            if "modelOutput" in guardrail_trace:
+                model_output = guardrail_trace["modelOutput"]
+                logger.debug(f"   Model output keys: {list(model_output.keys())}")
+                
+                if (
+                    "assessments" in model_output
+                    and "automatedReasoning" in model_output["assessments"]
+                ):
+                    ar_assessment = model_output["assessments"]["automatedReasoning"]
+                    findings = ar_assessment.get("findings", [])
+                    guardrail_findings.extend(findings)
+
+                    logger.info(f"   Automated Reasoning Findings: {len(findings)} findings")
+                    
+                    # Process different types of findings
+                    for i, finding in enumerate(findings):
+                        if "invalid" in finding:
+                            confidence = finding["invalid"].get("translation", {}).get("confidence", "N/A")
+                            logger.info(f"     Finding {i+1}: INVALID - {confidence} confidence")
+                            validation_passed = False
+                            validation_confidence = 0.5
+                        elif "satisfiable" in finding:
+                            confidence = finding["satisfiable"].get("translation", {}).get("confidence", "N/A")
+                            logger.info(f"     Finding {i+1}: SATISFIABLE - {confidence} confidence")
+                            
+                            # Check for mathematical errors
+                            claims = finding["satisfiable"].get("translation", {}).get("claims", [])
+                            for claim in claims:
+                                if "INVALID" in claim.get("naturalLanguage", "") or "MATHEMATICAL_ERROR" in claim.get("naturalLanguage", ""):
+                                    validation_passed = False
+                                    validation_confidence = 0.6
+                        else:
+                            logger.info(f"     Finding {i+1}: {finding}")
+                else:
+                    logger.warning(f"   No Automated Reasoning assessments found in model output")
+            else:
+                logger.warning(f"   No model output found in guardrail trace")
+        except Exception as e:
+            logger.error(f"Error processing guardrail dict: {e}")
 
     def _call_bedrock_with_retry(self, **kwargs):
         """Call Bedrock API with exponential backoff retry logic"""
