@@ -196,6 +196,10 @@ docker-compose.override.yml
 # App Runner
 apprunner-service.json
 
+# Sample files (contains customer data)
+sample/
+data/
+
 # Deployment
 *.pem
 *.key

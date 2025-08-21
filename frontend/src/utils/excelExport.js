@@ -1,5 +1,26 @@
 import * as XLSX from 'xlsx';
 
+// Configure XLSX for security - disable dangerous features
+XLSX.set_fs(() => {
+  throw new Error("File system access disabled for security");
+});
+
+// Safe XLSX configuration
+const SAFE_XLSX_OPTIONS = {
+  cellFormula: false,  // Disable formula parsing
+  cellHTML: false,     // Disable HTML parsing
+  cellNF: false,       // Disable number format parsing
+  cellStyles: false,   // Disable style parsing
+  sheetStubs: false,   // Disable stub cells
+  bookDeps: false,     // Disable dependency parsing
+  bookFiles: false,    // Disable file parsing
+  bookProps: false,    // Disable property parsing
+  bookSheets: false,   // Disable sheet parsing
+  bookVBA: false,      // Disable VBA parsing
+  password: "",        // No password support
+  WTF: false          // Disable "What The Format" mode
+};
+
 /**
  * Export timecard entries to Excel file
  * @param {Array} entries - Array of timecard entries
@@ -59,8 +80,8 @@ export const exportTimecardEntriesToExcel = (entries, fileName = 'timecard_entri
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
     const fullFileName = `${fileName}_${timestamp}.xlsx`;
 
-    // Write and download the file
-    XLSX.writeFile(workbook, fullFileName);
+    // Write and download the file with safe options
+    XLSX.writeFile(workbook, fullFileName, SAFE_XLSX_OPTIONS);
 
     return {
       success: true,
@@ -154,8 +175,8 @@ export const exportJobResultToExcel = (jobResult, fileName = 'job_result') => {
     const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
     const fullFileName = `${fileName}_${timestamp}.xlsx`;
 
-    // Write and download the file
-    XLSX.writeFile(workbook, fullFileName);
+    // Write and download the file with safe options
+    XLSX.writeFile(workbook, fullFileName, SAFE_XLSX_OPTIONS);
 
     return {
       success: true,

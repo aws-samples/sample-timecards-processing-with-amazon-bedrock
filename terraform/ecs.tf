@@ -103,9 +103,6 @@ resource "aws_ecs_task_definition" "app" {
       # Security: Run as non-root user
       user = "1000:1000"
       
-      # Security: Read-only root filesystem
-      readonlyRootFilesystem = true
-      
       # Security: Drop all capabilities
       linuxParameters = {
         capabilities = {

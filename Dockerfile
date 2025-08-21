@@ -1,4 +1,4 @@
-# Backend-only container for ECS Fargate
+# Production container for ECS Fargate with Gunicorn WSGI server
 FROM python:3.11-slim
 
 # Set working directory
@@ -13,18 +13,18 @@ RUN apt-get update && apt-get install -y \
 # Copy backend requirements
 COPY backend/requirements.txt ./
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies including Gunicorn for production
+RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 # Copy backend source
 COPY backend/ ./
 
-# Create necessary directories
-RUN mkdir -p uploads data sample
+# Create app user for security with specific UID/GID to match ECS
+RUN groupadd -r -g 1000 appuser && useradd -r -u 1000 -g appuser appuser
 
-# Copy sample data
-COPY data/ ./data/
-COPY sample/ ./sample/
+# Create necessary directories
+RUN mkdir -p uploads && \
+    chown -R appuser:appuser /app
 
 # Expose port
 EXPOSE 8080
@@ -35,9 +35,12 @@ ENV FLASK_ENV=production
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 
+# Switch to non-root user
+USER appuser
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the application
-CMD ["python", "app.py"]
+# Run with Gunicorn - simple configuration for writable filesystem
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "--access-logfile", "-", "--error-logfile", "-", "app:app"]

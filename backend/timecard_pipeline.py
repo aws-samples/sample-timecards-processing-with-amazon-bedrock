@@ -623,9 +623,14 @@ class TimecardPipeline:
 
             # Add validation results from guardrail
             extracted["validation_passed"] = validation_passed
-            extracted["validation_method"] = (
-                "automated_reasoning" if guardrail_findings else "none"
-            )
+            # Set validation method based on whether guardrail was configured and applied
+            if guardrail_config and guardrail_action != "NONE":
+                extracted["validation_method"] = "automated_reasoning"
+            elif guardrail_config:
+                # Guardrail configured but no action - still considered AR validation
+                extracted["validation_method"] = "automated_reasoning"
+            else:
+                extracted["validation_method"] = "none"
             extracted["validation_findings"] = guardrail_findings
             extracted["validation_confidence"] = validation_confidence
             extracted["guardrail_action"] = guardrail_action

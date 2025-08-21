@@ -16,6 +16,22 @@ import {
 import { jobService } from '../services/jobService';
 import * as XLSX from 'xlsx';
 
+// Safe XLSX configuration for security
+const SAFE_XLSX_OPTIONS = {
+  cellFormula: false,
+  cellHTML: false,
+  cellNF: false,
+  cellStyles: false,
+  sheetStubs: false,
+  bookDeps: false,
+  bookFiles: false,
+  bookProps: false,
+  bookSheets: false,
+  bookVBA: false,
+  password: "",
+  WTF: false
+};
+
 const Dashboard = ({ addNotification }) => {
   const [stats, setStats] = useState({});
   const [recentJobs, setRecentJobs] = useState([]);
@@ -74,8 +90,8 @@ const Dashboard = ({ addNotification }) => {
       const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
       const fileName = `dashboard_summary_${timestamp}.xlsx`;
 
-      // Download the file
-      XLSX.writeFile(workbook, fileName);
+      // Download the file with safe options
+      XLSX.writeFile(workbook, fileName, SAFE_XLSX_OPTIONS);
 
       addNotification({
         type: 'success',
