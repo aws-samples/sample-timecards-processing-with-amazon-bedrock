@@ -197,7 +197,8 @@ docker-compose.override.yml
 apprunner-service.json
 
 # Sample files (contains customer data)
-sample/
+sample/*
+!sample/.gitkeep
 data/
 
 # Deployment
