@@ -68,28 +68,6 @@ resource "aws_s3_bucket_public_access_block" "app_data" {
   restrict_public_buckets = true  # Allow presigned URL access
 }
 
-# S3 bucket policy to allow presigned URL uploads
-resource "aws_s3_bucket_policy" "app_data" {
-  bucket = aws_s3_bucket.app_data.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowPresignedUploads"
-        Effect = "Allow"
-        Principal = "*"
-        Action = [
-          "s3:PutObject",
-          "s3:PutObjectAcl",
-          "s3:GetObject"
-        ]
-        Resource = "${aws_s3_bucket.app_data.arn}/*"
-      }
-    ]
-  })
-}
-
 # S3 bucket CORS configuration for direct uploads
 resource "aws_s3_bucket_cors_configuration" "app_data" {
   bucket = aws_s3_bucket.app_data.id
