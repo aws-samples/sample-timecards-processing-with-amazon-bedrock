@@ -151,7 +151,7 @@ const UploadPage = ({ addNotification }) => {
         <SpaceBetween size="m">
           <FormField
             label="Select timecard file"
-            description="Supported formats: .xlsx, .xls, .csv (max 16MB)"
+            description="Supported formats: .xlsx, .xls, .xlsm, .csv (max 500MB). Large files use direct S3 upload for better performance."
           >
             <FileUpload
               onChange={({ detail }) => setFiles(detail.value)}
@@ -168,7 +168,7 @@ const UploadPage = ({ addNotification }) => {
               showFileSize
               showFileThumbnail
               tokenLimit={1}
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.xlsm,.csv"
             />
           </FormField>
 
@@ -183,7 +183,10 @@ const UploadPage = ({ addNotification }) => {
               />
               {uploadProgress > 10 && (
                 <Box variant="small" color="text-status-info">
-                  This may take up to 30 seconds to complete
+                  {files[0]?.size > 100 * 1024 * 1024 
+                    ? 'Large file detected - using multipart upload for better reliability'
+                    : 'This may take up to 30 seconds to complete'
+                  }
                 </Box>
               )}
             </SpaceBetween>
@@ -287,8 +290,7 @@ const UploadPage = ({ addNotification }) => {
           <div>
             <Box variant="h3">Supported File Types</Box>
             <ul style={{ marginLeft: '20px', paddingLeft: '0' }}>
-              <li>Excel files (.xlsx, .xls)</li>
-              <li>Excel macro-enabled (.xlsm)</li>
+              <li>Excel files (.xlsx, .xls, .xlsm)</li>
               <li>CSV files (.csv)</li>
             </ul>
           </div>

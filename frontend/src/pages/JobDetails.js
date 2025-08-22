@@ -166,8 +166,11 @@ const JobDetails = ({ addNotification }) => {
   useEffect(() => {
     if (job?.status) {
       if (['pending', 'processing'].includes(job.status)) {
+        console.log(`Starting polling for job ${job.id} with status: ${job.status}`);
         startPolling();
       } else {
+        // Stop polling for completed, failed, cancelled states
+        console.log(`Stopping polling for job ${job.id} with final status: ${job.status}`);
         stopPolling();
       }
     }

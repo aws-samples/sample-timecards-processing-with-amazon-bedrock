@@ -17,6 +17,194 @@ axios.interceptors.response.use(
 
 class JobService {
   async uploadFile(file, onProgress) {
+    try {
+      // Try presigned URL upload first (for S3)
+      return await this.uploadFileWithPresignedUrl(file, onProgress);
+    } catch (error) {
+      console.warn('Presigned URL upload failed, falling back to direct upload:', error.message);
+      // Fallback to direct upload through backend
+      return await this.uploadFileDirectly(file, onProgress);
+    }
+  }
+
+  async uploadFileWithPresignedUrl(file, onProgress) {
+    try {
+      // Step 1: Get presigned URL
+      console.log('Requesting presigned URL for:', {
+        filename: file.name,
+        file_size: file.size,
+        file_type: file.type
+      });
+
+      const presignedResponse = await axios.post(`${API_BASE}/upload/presigned-url`, {
+        filename: file.name,
+        file_size: file.size
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      console.log('Presigned URL response:', presignedResponse.data);
+
+      const { upload_type, ...uploadInfo } = presignedResponse.data;
+      
+      console.log('Upload method:', uploadInfo.method);
+      console.log('Upload URL:', uploadInfo.upload_url);
+      console.log('Has fields (POST):', !!uploadInfo.fields);
+      console.log('Full uploadInfo:', uploadInfo);
+
+      if (upload_type === 'multipart') {
+        return await this.uploadFileMultipart(file, uploadInfo, onProgress);
+      } else {
+        return await this.uploadFileSingle(file, uploadInfo, onProgress);
+      }
+    } catch (error) {
+      console.error('Presigned URL request failed:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      throw error;
+    }
+  }
+
+  async uploadFileSingle(file, uploadInfo, onProgress) {
+    // Step 2: Upload directly to S3 using presigned URL
+    console.log('uploadFileSingle - method:', uploadInfo.method);
+    console.log('uploadFileSingle - uploadInfo:', uploadInfo);
+    
+    if (uploadInfo.method === 'PUT') {
+      console.log('Using PUT method for upload');
+      // Use PUT method for simple presigned URL
+      await axios.put(uploadInfo.upload_url, file, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+        },
+        timeout: 300000, // 5 minute timeout
+        onUploadProgress: (progressEvent) => {
+          if (onProgress) {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            onProgress(percentCompleted);
+          }
+        },
+      });
+    } else {
+      // Use POST method with form data
+      console.log('Using POST method for upload');
+      const formData = new FormData();
+      
+      // Add all the fields from presigned URL
+      if (uploadInfo.fields) {
+        Object.keys(uploadInfo.fields).forEach(key => {
+          formData.append(key, uploadInfo.fields[key]);
+        });
+      }
+      
+      // Add the file last
+      formData.append('file', file);
+
+      await axios.post(uploadInfo.upload_url, formData, {
+        headers: {
+          // Don't set Content-Type, let browser set it with boundary
+        },
+        timeout: 300000, // 5 minute timeout
+        onUploadProgress: (progressEvent) => {
+          if (onProgress) {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+            onProgress(percentCompleted);
+          }
+        },
+      });
+    }
+
+    // Step 3: Complete the upload and create job
+    const completeResponse = await axios.post(`${API_BASE}/upload/complete`, {
+      s3_key: uploadInfo.s3_key,
+      bucket: uploadInfo.bucket,
+      original_filename: uploadInfo.original_filename,
+      unique_filename: uploadInfo.unique_filename,
+      upload_timestamp: uploadInfo.upload_timestamp,
+      upload_type: 'single'
+    });
+
+    return completeResponse.data;
+  }
+
+  async uploadFileMultipart(file, uploadInfo, onProgress) {
+    const { part_urls, upload_id, chunk_size } = uploadInfo;
+    const parts = [];
+    let uploadedBytes = 0;
+
+    try {
+      // Upload each part
+      for (let i = 0; i < part_urls.length; i++) {
+        const partInfo = part_urls[i];
+        const start = (partInfo.part_number - 1) * chunk_size;
+        const end = Math.min(start + chunk_size, file.size);
+        const chunk = file.slice(start, end);
+        const currentUploadedBytes = uploadedBytes; // Capture current value
+
+        const response = await axios.put(partInfo.upload_url, chunk, {
+          headers: {
+            'Content-Type': 'application/octet-stream',
+          },
+          timeout: 300000, // 5 minute timeout per part
+          onUploadProgress: (progressEvent) => {
+            if (onProgress) {
+              const partProgress = (currentUploadedBytes + progressEvent.loaded) / file.size * 100;
+              onProgress(Math.round(partProgress));
+            }
+          },
+        });
+
+        parts.push({
+          ETag: response.headers.etag,
+          PartNumber: partInfo.part_number
+        });
+
+        uploadedBytes += chunk.size;
+        
+        if (onProgress) {
+          onProgress(Math.round((uploadedBytes / file.size) * 100));
+        }
+      }
+
+      // Complete the multipart upload and create job
+      const completeResponse = await axios.post(`${API_BASE}/upload/complete`, {
+        s3_key: uploadInfo.s3_key,
+        bucket: uploadInfo.bucket,
+        original_filename: uploadInfo.original_filename,
+        unique_filename: uploadInfo.unique_filename,
+        upload_timestamp: uploadInfo.upload_timestamp,
+        upload_type: 'multipart',
+        upload_id: upload_id,
+        parts: parts
+      });
+
+      return completeResponse.data;
+
+    } catch (error) {
+      // Abort the multipart upload on error
+      try {
+        await axios.post(`${API_BASE}/upload/abort`, {
+          s3_key: uploadInfo.s3_key,
+          upload_id: upload_id
+        });
+      } catch (abortError) {
+        console.error('Failed to abort multipart upload:', abortError);
+      }
+      throw error;
+    }
+  }
+
+  async uploadFileDirectly(file, onProgress) {
+    // Fallback: Direct upload through backend (original method)
     const formData = new FormData();
     formData.append('file', file);
 
@@ -24,6 +212,9 @@ class JobService {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 300000, // 5 minute timeout for large file uploads
+      maxContentLength: 500 * 1024 * 1024, // 500MB max content length
+      maxBodyLength: 500 * 1024 * 1024, // 500MB max body length
       onUploadProgress: (progressEvent) => {
         if (onProgress) {
           const percentCompleted = Math.round(

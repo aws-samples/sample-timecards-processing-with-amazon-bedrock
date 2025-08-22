@@ -28,6 +28,7 @@ class ConfigManager:
             # AWS Configuration
             'aws_region': 'us-west-2',
             'bedrock_model_id': 'us.anthropic.claude-sonnet-4-20250514-v1:0',
+            's3_app_data_bucket': None,  # Set via environment or terraform output
             
             # Data Management
             'auto_cleanup_enabled': True,
@@ -142,6 +143,14 @@ class ConfigManager:
     def bedrock_model_id(self) -> str:
         model_id = self.get('bedrock_model_id', 'us.anthropic.claude-sonnet-4-20250514-v1:0')
         return model_id
+
+    @property
+    def s3_app_data_bucket(self) -> Optional[str]:
+        # Check environment variable first, then database
+        env_value = os.environ.get('S3_APP_DATA_BUCKET') or os.environ.get('S3_BUCKET')
+        if env_value:
+            return env_value
+        return self.get('s3_app_data_bucket')
 
     @property
     def auto_cleanup_enabled(self) -> bool:

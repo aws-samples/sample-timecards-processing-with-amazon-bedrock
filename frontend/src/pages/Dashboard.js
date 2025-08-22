@@ -178,16 +178,22 @@ const Dashboard = ({ addNotification }) => {
   useEffect(() => {
     fetchDashboardData();
     
-    // Only set up polling if we don't have persistent errors
-    if (!hasError) {
+    // Only poll if there are active jobs (pending/processing) and no persistent errors
+    const hasActiveJobs = (stats.pending > 0 || stats.processing > 0);
+    
+    if (!hasError && hasActiveJobs && errorCount < 5) {
+      console.log(`Dashboard: Starting polling - ${stats.pending} pending, ${stats.processing} processing jobs`);
       const interval = setInterval(() => {
-        if (errorCount < 5) {
-          fetchDashboardData();
-        }
-      }, 15000); // Refresh every 15 seconds (reduced frequency)
-      return () => clearInterval(interval);
+        fetchDashboardData();
+      }, 30000); // Refresh every 30 seconds when there are active jobs
+      return () => {
+        console.log('Dashboard: Stopping polling');
+        clearInterval(interval);
+      };
+    } else {
+      console.log(`Dashboard: No polling - hasError: ${hasError}, activeJobs: ${hasActiveJobs}, errorCount: ${errorCount}`);
     }
-  }, [fetchDashboardData, hasError, errorCount]);
+  }, [fetchDashboardData, hasError, errorCount, stats.pending, stats.processing]);
 
 
 
@@ -254,7 +260,11 @@ const Dashboard = ({ addNotification }) => {
     <SpaceBetween size="l">
       <Header
         variant="h1"
-        description="Monitor timecard processing jobs and system performance"
+        description={
+          (stats.pending > 0 || stats.processing > 0) 
+            ? "Monitor timecard processing jobs and system performance • Auto-refreshing every 30s"
+            : "Monitor timecard processing jobs and system performance"
+        }
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             <Button onClick={fetchDashboardData} loading={loading}>

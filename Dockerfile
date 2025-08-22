@@ -22,9 +22,10 @@ COPY backend/ ./
 # Create app user for security with specific UID/GID to match ECS
 RUN groupadd -r -g 1000 appuser && useradd -r -u 1000 -g appuser appuser
 
-# Create necessary directories
+# Create necessary directories with proper permissions
 RUN mkdir -p uploads && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app && \
+    chmod 755 uploads
 
 # Expose port
 EXPOSE 8080
@@ -42,5 +43,5 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run with Gunicorn - simple configuration for writable filesystem
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "100", "--preload", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+# Run with Gunicorn - remove preload to avoid database connection issues
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120", "--max-requests", "1000", "--max-requests-jitter", "100", "--access-logfile", "-", "--error-logfile", "-", "app:app"]

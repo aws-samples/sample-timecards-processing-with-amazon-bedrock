@@ -60,6 +60,7 @@ resource "aws_cloudfront_distribution" "main" {
     min_ttl                = 0
     default_ttl            = 0
     max_ttl                = 0
+    compress               = false  # Disable compression for API requests to avoid issues with large uploads
   }
 
   # Default behavior for static assets

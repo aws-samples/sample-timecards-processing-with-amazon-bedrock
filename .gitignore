@@ -214,3 +214,5 @@ data/
 *.njsproj
 *.sln
 *.sw?
+
+backend/uploads/

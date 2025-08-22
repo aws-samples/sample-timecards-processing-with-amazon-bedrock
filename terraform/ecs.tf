@@ -62,7 +62,7 @@ resource "aws_ecs_task_definition" "app" {
           value = var.aws_region
         },
         {
-          name  = "S3_BUCKET"
+          name  = "S3_APP_DATA_BUCKET"
           value = aws_s3_bucket.app_data.bucket
         },
         {

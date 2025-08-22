@@ -18,13 +18,21 @@ from timecard_pipeline import TimecardPipeline
 from database import DatabaseManager, JobStatus, JobPriority
 from job_queue import JobQueue
 from config_manager import ConfigManager
+from s3_utils import S3Manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-CORS(app, origins=["http://localhost:3000", "http://127.0.0.1:3000"])
+CORS(
+    app,
+    origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://timecard.sanghwa.people.aws.dev",
+    ],
+)
 
 # Initialize database and configuration
 try:
@@ -36,13 +44,38 @@ except Exception as e:
     logger.error(f"Failed to initialize database: {e}")
     raise
 
+# Initialize S3 manager
+s3_manager = None
+try:
+    s3_bucket = config_manager.s3_app_data_bucket
+    logger.info(f"S3 bucket configuration: {s3_bucket}")
+    if s3_bucket:
+        s3_manager = S3Manager(s3_bucket, config_manager.aws_region)
+        logger.info(f"S3 manager initialized for bucket: {s3_bucket} in region: {config_manager.aws_region}")
+        
+        # Test S3 access
+        access_check = s3_manager.check_bucket_access()
+        logger.info(f"S3 bucket access check: {access_check}")
+        
+        if not access_check.get('accessible', False):
+            logger.error(f"S3 bucket not accessible: {access_check}")
+            s3_manager = None
+    else:
+        logger.warning("S3 bucket not configured, falling back to local storage")
+except Exception as e:
+    logger.error(f"Failed to initialize S3 manager: {e}")
+    logger.warning("Falling back to local storage")
+    s3_manager = None
+
 # Configuration
 UPLOAD_FOLDER = Path("uploads")
 UPLOAD_FOLDER.mkdir(exist_ok=True)
-ALLOWED_EXTENSIONS = {"xlsx", "xls", "csv"}
+ALLOWED_EXTENSIONS = {"xlsx", "xls", "xlsm", "csv"}
 
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max file size
+app.config["MAX_CONTENT_LENGTH"] = (
+    500 * 1024 * 1024
+)  # 500MB max file size for large Excel files
 
 # Initialize pipeline with configuration
 try:
@@ -167,14 +200,54 @@ def job_processor():
 
             # Process job in separate thread
             def process_job(job):
+                local_file_path = None
                 try:
                     if job.type == "timecard_processing":
-                        # Get file path from metadata
-                        file_path = (
-                            job.metadata.get("file_path") if job.metadata else None
+                        storage_type = (
+                            job.metadata.get("storage_type", "local")
+                            if job.metadata
+                            else "local"
                         )
-                        if not file_path or not Path(file_path).exists():
-                            raise Exception("File not found")
+
+                        if storage_type == "s3":
+                            # Handle S3 stored file
+                            s3_key = job.metadata.get("s3_key")
+                            s3_bucket = job.metadata.get("s3_bucket")
+                            unique_filename = job.metadata.get("unique_filename")
+
+                            logger.info(f"Processing S3 job - s3_key: {s3_key}, s3_bucket: {s3_bucket}, s3_manager: {s3_manager is not None}")
+                            logger.info(f"Job metadata: {job.metadata}")
+
+                            if not s3_key or not s3_bucket:
+                                raise Exception(f"S3 file information missing - s3_key: {s3_key}, s3_bucket: {s3_bucket}")
+                            
+                            if not s3_manager:
+                                raise Exception("S3 manager not available - check S3 configuration")
+
+                            # Download file from S3 to temporary local path
+                            temp_dir = Path("temp_processing")
+                            temp_dir.mkdir(exist_ok=True)
+                            local_file_path = temp_dir / unique_filename
+
+                            logger.info(f"Downloading file from S3: {s3_key} to {local_file_path}")
+                            if not s3_manager.download_file(
+                                s3_key, str(local_file_path)
+                            ):
+                                raise Exception(f"Failed to download file from S3: {s3_key}")
+
+                            if not local_file_path.exists():
+                                raise Exception(f"Downloaded file does not exist: {local_file_path}")
+
+                            file_path = str(local_file_path)
+                            logger.info(f"S3 file downloaded successfully: {file_path} (size: {local_file_path.stat().st_size} bytes)")
+
+                        else:
+                            # Handle local file
+                            file_path = (
+                                job.metadata.get("file_path") if job.metadata else None
+                            )
+                            if not file_path or not Path(file_path).exists():
+                                raise Exception("Local file not found")
 
                         # Update progress - Step 1: Excel to Markdown
                         job_queue.update_job_status(
@@ -189,17 +262,43 @@ def job_processor():
                             job.id, JobStatus.PROCESSING, progress=90
                         )
 
-                        # Clean up uploaded file (only if not a sample)
+                        # Clean up files (only if not a sample)
                         is_sample = (
                             job.metadata.get("is_sample", False)
                             if job.metadata
                             else False
                         )
+
                         if not is_sample:
-                            try:
-                                Path(file_path).unlink()
-                            except:
-                                pass
+                            if storage_type == "s3":
+                                # Clean up S3 file and local temp file
+                                try:
+                                    if s3_manager and job.metadata.get("s3_key"):
+                                        s3_manager.delete_file(job.metadata["s3_key"])
+                                        logger.info(
+                                            f"Deleted S3 file: {job.metadata['s3_key']}"
+                                        )
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete S3 file: {e}")
+
+                                # Clean up local temp file
+                                if local_file_path and local_file_path.exists():
+                                    try:
+                                        local_file_path.unlink()
+                                        logger.info(
+                                            f"Deleted temp file: {local_file_path}"
+                                        )
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"Failed to delete temp file: {e}"
+                                        )
+                            else:
+                                # Clean up local file
+                                try:
+                                    Path(file_path).unlink()
+                                    logger.info(f"Deleted local file: {file_path}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to delete local file: {e}")
 
                         # Complete job
                         job_queue.update_job_status(
@@ -215,6 +314,13 @@ def job_processor():
                     logger.error(f"Job {job.id} failed: {e}")
                     job_queue.update_job_status(job.id, JobStatus.FAILED, error=str(e))
                 finally:
+                    # Clean up temp file if it exists
+                    if local_file_path and local_file_path.exists():
+                        try:
+                            local_file_path.unlink()
+                        except:
+                            pass
+
                     # Remove from active jobs
                     if job.id in active_jobs:
                         del active_jobs[job.id]
@@ -234,11 +340,47 @@ processor_thread.start()
 
 
 def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+    if not filename or "." not in filename:
+        logger.warning(f"Invalid filename format: {filename}")
+        return False
+    
+    extension = filename.rsplit(".", 1)[1].lower()
+    is_allowed = extension in ALLOWED_EXTENSIONS
+    
+    logger.info(f"File validation - filename: {filename}, extension: {extension}, allowed: {is_allowed}")
+    return is_allowed
+
+def clean_excel_file(file_path):
+    """
+    Clean Excel file by removing potentially problematic content like comments, drawings, etc.
+    Returns the path to the cleaned file.
+    """
+    try:
+        import pandas as pd
+        import tempfile
+        import os
+        
+        # Read the Excel file
+        df = pd.read_excel(file_path)
+        
+        # Create a temporary cleaned file
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.xlsx')
+        os.close(temp_fd)
+        
+        # Save as a clean Excel file (removes comments, drawings, etc.)
+        df.to_excel(temp_path, index=False)
+        
+        logger.info(f"Cleaned Excel file: {file_path} -> {temp_path}")
+        return temp_path
+        
+    except Exception as e:
+        logger.error(f"Failed to clean Excel file {file_path}: {str(e)}")
+        return file_path  # Return original file if cleaning fails
 
 
 @app.route("/", methods=["GET"])
 @app.route("/health", methods=["GET"])
+@app.route("/api/health", methods=["GET"])
 def health_check():
     """Health check endpoint"""
     try:
@@ -258,12 +400,35 @@ def health_check():
             else "fallback"
         )
 
+        # Check storage status
+        storage_status = {}
+        if s3_manager:
+            s3_check = s3_manager.check_bucket_access()
+            storage_status = {
+                "type": "s3",
+                "s3_accessible": s3_check["accessible"],
+                "bucket": s3_check["bucket"],
+                "region": s3_check.get("region", config_manager.aws_region),
+            }
+            if not s3_check["accessible"]:
+                storage_status["s3_error"] = s3_check.get("error", "Unknown")
+        else:
+            # Fallback to local storage check
+            storage_status = {
+                "type": "local",
+                "upload_dir_exists": UPLOAD_FOLDER.exists(),
+                "upload_dir_writable": UPLOAD_FOLDER.exists()
+                and os.access(UPLOAD_FOLDER, os.W_OK),
+                "upload_dir_path": str(UPLOAD_FOLDER),
+            }
+
         return jsonify(
             {
                 "status": "healthy",
                 "service": "timecard-processor",
                 "database": db_type,
                 "queue_stats": stats,
+                "storage": storage_status,
                 "automated_reasoning": {
                     "status": ar_status,
                     "validation_method": validation_method,
@@ -281,50 +446,455 @@ def health_check():
         )
 
 
-@app.route("/api/upload", methods=["POST"])
-def upload_file():
-    """Upload file and create processing job"""
+@app.route("/api/s3/test", methods=["GET", "OPTIONS"])
+def test_s3_connection():
+    """Test S3 connection and permissions"""
     try:
-        if "file" not in request.files:
-            return jsonify({"error": "No file provided"}), 400
+        if request.method == "OPTIONS":
+            return "", 200
 
-        file = request.files["file"]
-        if file.filename == "":
-            return jsonify({"error": "No file selected"}), 400
+        if not s3_manager:
+            return jsonify({"error": "S3 not configured"}), 500
 
-        if not allowed_file(file.filename):
+        # Test bucket access
+        access_check = s3_manager.check_bucket_access()
+        
+        # Test presigned URL generation
+        test_result = s3_manager.generate_presigned_upload_url("test.txt")
+        
+        return jsonify({
+            "s3_access": access_check,
+            "presigned_url_test": {
+                "success": test_result["success"],
+                "error": test_result.get("error", None)
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"S3 test failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload/presigned-url", methods=["POST", "OPTIONS"])
+def get_presigned_upload_url():
+    """Get presigned URL for direct S3 upload"""
+    try:
+        logger.info(f"=== PRESIGNED URL REQUEST ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Headers: {dict(request.headers)}")
+        logger.info(f"S3 Manager available: {s3_manager is not None}")
+        if s3_manager:
+            logger.info(f"S3 Bucket: {s3_manager.bucket_name}")
+            logger.info(f"S3 Region: {s3_manager.region}")
+        
+        if request.method == "OPTIONS":
+            logger.info("Handling OPTIONS preflight request")
+            return "", 200
+
+        # Get request data
+        try:
+            data = request.get_json()
+            logger.info(f"Request data: {data}")
+        except Exception as json_e:
+            logger.error(f"Failed to parse JSON: {json_e}")
+            return jsonify({"error": "Invalid JSON in request body"}), 400
+
+        if not data:
+            logger.error("No data in request body")
+            return jsonify({"error": "Request body is required"}), 400
+
+        filename = data.get("filename")
+        file_size = data.get("file_size", 0)
+
+        logger.info(f"Filename: {filename}")
+        logger.info(f"File size: {file_size}")
+
+        if not filename:
+            logger.error("No filename provided")
+            return jsonify({"error": "Filename is required"}), 400
+
+        # Validate file type
+        if not allowed_file(filename):
+            logger.error(f"Invalid file type: {filename}")
             return (
-                jsonify({"error": "Invalid file type. Only Excel files allowed"}),
+                jsonify({"error": "Invalid file type. Only Excel (.xlsx, .xls, .xlsm) and CSV files allowed"}),
                 400,
             )
 
-        # Save uploaded file
-        filename = secure_filename(file.filename)
-        timestamp = int(time.time())
-        unique_filename = f"{timestamp}_{filename}"
-        file_path = UPLOAD_FOLDER / unique_filename
-        file.save(file_path)
+        # Validate file size
+        if file_size <= 0:
+            logger.error(f"Invalid file size: {file_size}")
+            return jsonify({"error": "File size must be greater than 0"}), 400
 
-        # Get file size
-        file_size = file_path.stat().st_size
+        if file_size > 500 * 1024 * 1024:  # 500MB limit
+            logger.error(f"File too large: {file_size} bytes")
+            return jsonify({"error": "File size exceeds 500MB limit"}), 400
 
-        logger.info(f"File uploaded: {filename} ({file_size} bytes)")
+        # Check S3 manager
+        if not s3_manager:
+            logger.error("S3 manager not available for presigned URL generation")
+            return (
+                jsonify({"error": "S3 not configured. Please use regular upload."}),
+                400,
+            )
 
-        # Create job with model information
+        # Use multipart upload for files larger than 100MB
+        if file_size > 100 * 1024 * 1024:  # 100MB
+            logger.info(
+                f"Generating multipart upload URLs for large file: {filename} ({file_size} bytes)"
+            )
+            result = s3_manager.generate_multipart_upload_urls(filename, file_size)
+        else:
+            logger.info(
+                f"Generating presigned upload URL for: {filename} ({file_size} bytes)"
+            )
+            result = s3_manager.generate_presigned_upload_url(filename)
+
+        if result["success"]:
+            return jsonify(
+                {
+                    "status": "success",
+                    "upload_type": (
+                        "multipart" if file_size > 100 * 1024 * 1024 else "single"
+                    ),
+                    **result,
+                }
+            )
+        else:
+            return (
+                jsonify(
+                    {
+                        "error": "Failed to generate upload URL",
+                        "details": result.get("error", "Unknown error"),
+                    }
+                ),
+                500,
+            )
+
+    except Exception as e:
+        logger.error(f"Failed to generate presigned upload URL: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload/complete", methods=["POST", "OPTIONS"])
+def complete_upload():
+    """Complete upload and create processing job"""
+    try:
+        if request.method == "OPTIONS":
+            return "", 200
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        s3_key = data.get("s3_key")
+        bucket = data.get("bucket")
+        original_filename = data.get("original_filename")
+        unique_filename = data.get("unique_filename")
+        upload_timestamp = data.get("upload_timestamp")
+        upload_type = data.get("upload_type", "single")
+
+        if not all([s3_key, bucket, original_filename]):
+            return jsonify({"error": "Missing required upload information"}), 400
+
+        logger.info(f"Completing upload - s3_key: {s3_key}, bucket: {bucket}, filename: {original_filename}")
+
+        # Verify S3 manager is available
+        if not s3_manager:
+            logger.error("S3 manager not available for upload completion")
+            return jsonify({"error": "S3 not configured"}), 500
+
+        # Verify file exists in S3
+        try:
+            s3_manager.s3_client.head_object(Bucket=bucket, Key=s3_key)
+            logger.info(f"Confirmed S3 file exists: {s3_key}")
+        except Exception as e:
+            logger.error(f"S3 file verification failed: {e}")
+            return jsonify({"error": f"Uploaded file not found in S3: {s3_key}"}), 400
+
+        # For multipart uploads, complete the multipart upload first
+        if upload_type == "multipart":
+            upload_id = data.get("upload_id")
+            parts = data.get("parts", [])
+
+            if not upload_id or not parts:
+                return jsonify({"error": "Missing multipart upload information"}), 400
+
+            completion_result = s3_manager.complete_multipart_upload(
+                s3_key, upload_id, parts
+            )
+            if not completion_result["success"]:
+                return (
+                    jsonify(
+                        {
+                            "error": "Failed to complete multipart upload",
+                            "details": completion_result.get("error", "Unknown error"),
+                        }
+                    ),
+                    500,
+                )
+
+            file_size = completion_result["file_size"]
+        else:
+            # For single uploads, get file size from S3
+            try:
+                response = s3_manager.s3_client.head_object(Bucket=bucket, Key=s3_key)
+                file_size = response["ContentLength"]
+            except Exception as e:
+                logger.error(f"Failed to get file size from S3: {e}")
+                return jsonify({"error": "Failed to verify uploaded file"}), 500
+
+        # Create job with S3 information
         job_id = job_queue.create_job(
             job_type="timecard_processing",
-            file_name=filename,
+            file_name=original_filename,
             file_size=file_size,
             priority=JobPriority.NORMAL,
             metadata={
-                "file_path": str(file_path),
-                "original_filename": filename,
+                "storage_type": "s3",
+                "s3_bucket": bucket,
+                "s3_key": s3_key,
+                "original_filename": original_filename,
+                "unique_filename": unique_filename,
+                "upload_timestamp": upload_timestamp,
+                "upload_type": upload_type,
                 "model_info": {
                     "model_id": config_manager.bedrock_model_id,
                     "aws_region": config_manager.aws_region,
                 },
             },
         )
+
+        logger.info(
+            f"Job created for S3 upload: {job_id} - {original_filename} ({file_size} bytes)"
+        )
+
+        return jsonify(
+            {
+                "status": "success",
+                "job_id": job_id,
+                "message": "File uploaded and job created",
+                "file_name": original_filename,
+                "file_size": file_size,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to complete upload: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload/abort", methods=["POST", "OPTIONS"])
+def abort_upload():
+    """Abort multipart upload"""
+    try:
+        if request.method == "OPTIONS":
+            return "", 200
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        s3_key = data.get("s3_key")
+        upload_id = data.get("upload_id")
+
+        if not all([s3_key, upload_id]):
+            return jsonify({"error": "Missing required abort information"}), 400
+
+        if not s3_manager:
+            return jsonify({"error": "S3 not configured"}), 400
+
+        success = s3_manager.abort_multipart_upload(s3_key, upload_id)
+
+        if success:
+            return jsonify({"status": "success", "message": "Upload aborted"})
+        else:
+            return jsonify({"error": "Failed to abort upload"}), 500
+
+    except Exception as e:
+        logger.error(f"Failed to abort upload: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload", methods=["POST", "OPTIONS"])
+def upload_file():
+    """Upload file and create processing job (fallback method)"""
+    try:
+        logger.info(f"=== UPLOAD REQUEST (FALLBACK) ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Path: {request.path}")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(
+            f"Content-Length: {request.headers.get('Content-Length', 'Unknown')}"
+        )
+        logger.info(f"Files: {list(request.files.keys())}")
+
+        if request.method == "OPTIONS":
+            logger.info("Handling OPTIONS preflight request")
+            return "", 200
+
+        if "file" not in request.files:
+            logger.warning("No file in request")
+            return jsonify({"error": "No file provided"}), 400
+
+        file = request.files["file"]
+        if file.filename == "":
+            logger.warning("Empty filename")
+            return jsonify({"error": "No file selected"}), 400
+
+        if not allowed_file(file.filename):
+            logger.warning(f"Invalid file type: {file.filename}")
+            return (
+                jsonify({"error": "Invalid file type. Only Excel (.xlsx, .xls, .xlsm) and CSV files allowed"}),
+                400,
+            )
+
+        filename = secure_filename(file.filename)
+        
+        # Clean Excel files to remove potentially problematic content
+        file_to_upload = file
+        temp_file_path = None
+        
+        if filename.lower().endswith(('.xlsx', '.xls', '.xlsm')):
+            logger.info(f"Cleaning Excel file: {filename}")
+            try:
+                # Save uploaded file temporarily
+                import tempfile
+                temp_fd, temp_upload_path = tempfile.mkstemp(suffix='.xlsx')
+                with os.fdopen(temp_fd, 'wb') as tmp:
+                    file.seek(0)
+                    tmp.write(file.read())
+                
+                # Clean the file
+                cleaned_path = clean_excel_file(temp_upload_path)
+                
+                if cleaned_path != temp_upload_path:
+                    # File was cleaned, use the cleaned version
+                    temp_file_path = cleaned_path
+                    with open(cleaned_path, 'rb') as cleaned_file:
+                        file_to_upload = cleaned_file
+                        file_content = cleaned_file.read()
+                        
+                    # Create a file-like object from the cleaned content
+                    from io import BytesIO
+                    file_to_upload = BytesIO(file_content)
+                    file_to_upload.filename = filename
+                    
+                    logger.info(f"Using cleaned version of {filename}")
+                else:
+                    # Cleaning failed, use original
+                    file.seek(0)
+                    
+                # Clean up temp upload file
+                os.unlink(temp_upload_path)
+                
+            except Exception as e:
+                logger.error(f"Error cleaning Excel file: {str(e)}")
+                file.seek(0)  # Use original file
+
+        # Try S3 upload first, fallback to local storage
+        if s3_manager:
+            logger.info(f"Uploading file to S3: {filename}")
+
+            # Reset file pointer to beginning
+            file_to_upload.seek(0)
+
+            upload_result = s3_manager.upload_file(file_to_upload, filename)
+
+            if upload_result["success"]:
+                logger.info(
+                    f"File uploaded successfully to S3: {filename} ({upload_result['file_size']} bytes)"
+                )
+
+                # Create job with S3 information
+                job_id = job_queue.create_job(
+                    job_type="timecard_processing",
+                    file_name=filename,
+                    file_size=upload_result["file_size"],
+                    priority=JobPriority.NORMAL,
+                    metadata={
+                        "storage_type": "s3",
+                        "s3_bucket": upload_result["bucket"],
+                        "s3_key": upload_result["s3_key"],
+                        "original_filename": filename,
+                        "unique_filename": upload_result["unique_filename"],
+                        "upload_timestamp": upload_result["upload_timestamp"],
+                        "model_info": {
+                            "model_id": config_manager.bedrock_model_id,
+                            "aws_region": config_manager.aws_region,
+                        },
+                    },
+                )
+
+                file_size = upload_result["file_size"]
+            else:
+                logger.error(
+                    f"S3 upload failed: {upload_result.get('error', 'Unknown error')}"
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": "File upload failed",
+                            "details": upload_result.get("error", "S3 upload error"),
+                        }
+                    ),
+                    500,
+                )
+        else:
+            # Fallback to local storage
+            logger.info(f"S3 not available, using local storage: {filename}")
+
+            # Check upload directory
+            if not UPLOAD_FOLDER.exists():
+                logger.error(f"Upload directory does not exist: {UPLOAD_FOLDER}")
+                return jsonify({"error": "Upload directory not available"}), 500
+
+            if not os.access(UPLOAD_FOLDER, os.W_OK):
+                logger.error(f"Upload directory not writable: {UPLOAD_FOLDER}")
+                return jsonify({"error": "Upload directory not writable"}), 500
+
+            timestamp = int(time.time())
+            unique_filename = f"{timestamp}_{filename}"
+            file_path = UPLOAD_FOLDER / unique_filename
+
+            logger.info(f"Saving file to: {file_path}")
+            
+            # Handle both regular file objects and BytesIO objects
+            if hasattr(file_to_upload, 'save'):
+                # Regular Flask file object
+                file_to_upload.save(file_path)
+            else:
+                # BytesIO or other file-like object
+                file_to_upload.seek(0)
+                with open(file_path, 'wb') as f:
+                    f.write(file_to_upload.read())
+
+            # Get file size
+            file_size = file_path.stat().st_size
+
+            logger.info(
+                f"File uploaded successfully to local storage: {filename} ({file_size} bytes)"
+            )
+
+            # Create job with local file information
+            job_id = job_queue.create_job(
+                job_type="timecard_processing",
+                file_name=filename,
+                file_size=file_size,
+                priority=JobPriority.NORMAL,
+                metadata={
+                    "storage_type": "local",
+                    "file_path": str(file_path),
+                    "original_filename": filename,
+                    "unique_filename": unique_filename,
+                    "upload_timestamp": timestamp,
+                    "model_info": {
+                        "model_id": config_manager.bedrock_model_id,
+                        "aws_region": config_manager.aws_region,
+                    },
+                },
+            )
 
         return jsonify(
             {
@@ -339,6 +909,14 @@ def upload_file():
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         return jsonify({"error": str(e)}), 500
+    finally:
+        # Clean up temporary files
+        if 'temp_file_path' in locals() and temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+            except Exception as e:
+                logger.warning(f"Failed to clean up temporary file {temp_file_path}: {e}")
 
 
 @app.route("/api/jobs/<job_id>/download", methods=["GET"])
@@ -1000,6 +1578,32 @@ def retry_automated_reasoning():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+@app.route("/api/automated-reasoning/cleanup", methods=["POST"])
+def cleanup_automated_reasoning():
+    """Clean up orphaned Automated Reasoning resources"""
+    try:
+        from automated_reasoning_provisioner import AutomatedReasoningProvisioner
+
+        provisioner = AutomatedReasoningProvisioner(
+            region_name=config_manager.aws_region, config_manager=config_manager
+        )
+
+        # Clean up orphaned resources
+        result = provisioner.cleanup_orphaned_resources()
+
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Cleanup completed",
+                "result": result,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to cleanup Automated Reasoning resources: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 @app.route("/api/settings", methods=["POST"])
 def update_settings():
     """Update application settings"""
@@ -1051,6 +1655,37 @@ def update_setting(setting_key):
 
     except Exception as e:
         logger.error(f"Failed to update setting {setting_key}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/s3-status", methods=["GET"])
+def debug_s3_status():
+    """Debug endpoint to check S3 configuration and status"""
+    try:
+        status = {
+            "s3_manager_initialized": s3_manager is not None,
+            "s3_bucket_config": config_manager.s3_app_data_bucket,
+            "aws_region": config_manager.aws_region,
+        }
+        
+        if s3_manager:
+            access_check = s3_manager.check_bucket_access()
+            status.update({
+                "bucket_accessible": access_check.get('accessible', False),
+                "bucket_check_details": access_check
+            })
+            
+            # Try to list a few objects
+            try:
+                objects = s3_manager.list_files(prefix="uploads/", max_keys=5)
+                status["recent_uploads"] = [obj.get('Key', 'unknown') for obj in objects[:3]]
+            except Exception as e:
+                status["list_error"] = str(e)
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        logger.error(f"Debug S3 status failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 

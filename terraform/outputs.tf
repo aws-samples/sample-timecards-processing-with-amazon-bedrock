@@ -28,6 +28,11 @@ output "alb_zone_id" {
   value       = aws_lb.main.zone_id
 }
 
+output "alb_arn" {
+  description = "ARN of the load balancer"
+  value       = aws_lb.main.arn
+}
+
 output "cloudfront_distribution_id" {
   description = "ID of the CloudFront distribution"
   value       = aws_cloudfront_distribution.main.id

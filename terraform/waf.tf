@@ -44,6 +44,14 @@ resource "aws_wafv2_web_acl" "cloudfront" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesCommonRuleSet"
         vendor_name = "AWS"
+
+        # Override the SizeRestrictions_BODY rule to count instead of block
+        rule_action_override {
+          action_to_use {
+            count {}
+          }
+          name = "SizeRestrictions_BODY"
+        }
       }
     }
 
@@ -67,6 +75,28 @@ resource "aws_wafv2_web_acl" "cloudfront" {
       managed_rule_group_statement {
         name        = "AWSManagedRulesKnownBadInputsRuleSet"
         vendor_name = "AWS"
+
+        # Override specific rules that might block Excel files with comments/drawings
+        rule_action_override {
+          action_to_use {
+            count {}
+          }
+          name = "Host_localhost_HEADER"
+        }
+        
+        rule_action_override {
+          action_to_use {
+            count {}
+          }
+          name = "PROPFIND_METHOD"
+        }
+        
+        rule_action_override {
+          action_to_use {
+            count {}
+          }
+          name = "ExploitablePaths_URIPATH"
+        }
       }
     }
 
@@ -106,6 +136,15 @@ resource "aws_wafv2_web_acl" "cloudfront" {
     cloudwatch_metrics_enabled = true
     metric_name                = "${var.project_name}-cloudfront-waf"
     sampled_requests_enabled   = true
+  }
+
+  # Association configuration for body inspection size limit
+  association_config {
+    request_body {
+      cloudfront {
+        default_size_inspection_limit = "KB_64"  # Increase from default 16KB to 64KB
+      }
+    }
   }
 }
 
