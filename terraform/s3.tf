@@ -63,9 +63,9 @@ resource "aws_s3_bucket_public_access_block" "app_data" {
   bucket = aws_s3_bucket.app_data.id
 
   block_public_acls       = true
-  block_public_policy     = false  # Allow bucket policy for presigned URLs
+  block_public_policy     = true  # Allow bucket policy for presigned URLs
   ignore_public_acls      = true
-  restrict_public_buckets = false  # Allow presigned URL access
+  restrict_public_buckets = true  # Allow presigned URL access
 }
 
 # S3 bucket policy to allow presigned URL uploads
